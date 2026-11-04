@@ -1,0 +1,8 @@
+# build & runtime artifacts
+build/
+oracle/target/
+.DS_Store
+*.dSYM/
+*.log
+__pycache__/
+*.pyc

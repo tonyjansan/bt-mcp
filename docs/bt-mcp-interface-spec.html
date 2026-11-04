@@ -1,0 +1,501 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>BT-MCP 接口规约</title>
+<style>
+:root{
+  --bg:#f7f8fa; --surface:#ffffff; --fg:#1c2430; --muted:#5b6470;
+  --accent:#0b62c4; --accent-soft:#e3eefc; --border:#d9dee6;
+  --code-bg:#eef1f5; --code-fg:#1c2430; --kw:#0b62c4; --cmt:#7a8592;
+  --ok:#1a7f4b; --err:#b3261e; --warn:#92610a; --byte-a:#d9e6f7; --byte-b:#e9edf3;
+  --badge-fg:#ffffff; --kbd-bg:#eef1f5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#101419; --surface:#171d24; --fg:#dde3ea; --muted:#94a0ad;
+    --accent:#5aa2f0; --accent-soft:#1a2936; --border:#2b333d;
+    --code-bg:#1a2028; --code-fg:#dde3ea; --kw:#6cb0f7; --cmt:#6a7684;
+    --ok:#4fc47f; --err:#f08a82; --warn:#e0b45c; --byte-a:#223140; --byte-b:#1a232c;
+    --badge-fg:#0d1117; --kbd-bg:#202831;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101419; --surface:#171d24; --fg:#dde3ea; --muted:#94a0ad;
+  --accent:#5aa2f0; --accent-soft:#1a2936; --border:#2b333d;
+  --code-bg:#1a2028; --code-fg:#dde3ea; --kw:#6cb0f7; --cmt:#6a7684;
+  --ok:#4fc47f; --err:#f08a82; --warn:#e0b45c; --byte-a:#223140; --byte-b:#1a232c;
+  --badge-fg:#0d1117; --kbd-bg:#202831;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:0 64px;
+  font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+.wrap{max-width:960px;margin:0 auto;min-width:0}
+h1{font-size:30px;line-height:1.25;margin:40px 0 6px;letter-spacing:-.5px;text-wrap:balance}
+.sub{color:var(--muted);font-size:14px;margin:0 0 28px}
+h2{font-size:21px;margin:52px 0 14px;padding-top:8px;border-top:1px solid var(--border);text-wrap:balance}
+h2 .no{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:8px}
+h3{font-size:16.5px;margin:28px 0 10px}
+p{margin:10px 0;max-width:76ch}
+ul,ol{margin:10px 0;padding-left:26px;max-width:76ch}
+li{margin:4px 0}
+code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,"Cascadia Mono",monospace;
+  font-size:.9em;background:var(--code-bg);color:var(--code-fg);
+  padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;
+  padding:14px 16px;overflow-x:auto;line-height:1.55;margin:12px 0;
+  font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.8px;color:var(--code-fg)}
+pre code{background:none;border:none;padding:0;font-size:inherit}
+.c{color:var(--cmt)} .k{color:var(--kw)}
+table{border-collapse:collapse;margin:14px 0;font-size:13.8px;display:block;overflow-x:auto;max-width:100%}
+th,td{border:1px solid var(--border);padding:7px 12px;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600;white-space:nowrap}
+td{background:var(--surface)}
+td code{white-space:nowrap}
+.meta{color:var(--muted);font-size:13px}
+.ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)}
+.badge{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:99px;
+  background:var(--accent);color:var(--badge-fg);vertical-align:2px;letter-spacing:.3px}
+.note{border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:10px 16px;border-radius:0 8px 8px 0;margin:14px 0;font-size:14px}
+.note.warn{border-left-color:var(--warn)}
+.note strong{color:var(--accent)}
+.note.warn strong{color:var(--warn)}
+/* byte map */
+.bytegrid{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
+.byte{border:1px solid var(--border);border-radius:8px;overflow:hidden;min-width:88px;flex:0 1 auto}
+.byte .hb{font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:3px 8px;text-align:center;white-space:nowrap}
+.byte .lb{font-size:12px;padding:5px 8px;text-align:center;color:var(--muted);background:var(--surface)}
+.byte:nth-child(odd) .hb{background:var(--byte-a)} .byte:nth-child(even) .hb{background:var(--byte-b)}
+.tag{font-size:11px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 22px;margin:0 0 8px}
+.toc a{color:var(--accent);text-decoration:none;display:block;padding:2.5px 0;font-size:14px}
+.toc a:hover{text-decoration:underline}
+.toc .lvl2{padding-left:18px;font-size:13.5px;color:var(--muted)}
+a{color:var(--accent)}
+.flow{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:12px 16px;overflow-x:auto;font-family:ui-monospace,Menlo,monospace;
+  font-size:12.5px;line-height:1.7;white-space:pre;margin:14px 0}
+.sig{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:0;margin:16px 0;overflow:hidden}
+.sig .sig-h{padding:9px 16px;border-bottom:1px solid var(--border);font-family:ui-monospace,Menlo,monospace;font-size:12.8px;font-weight:600}
+.sig .sig-b{padding:12px 16px}
+</style>
+
+<div class="wrap">
+<h1>BT-MCP v0.2 外部接口规约</h1>
+<p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-04</p>
+
+<p>本文面向要把 <strong>bt-mcp core</strong> 接到真实 GATT / SPP 通道上的宿主（Proxy/Host）开发者。core 自身零厂商假设、零 OS 依赖、无动态分配；宿主的全部职责集中在三件事：<strong>① 填通道能力结构体，② 提供一对 emit/送达回调，③ 驱动时钟（tick）</strong>。其余协议细节（分片、信用、状态机、JSON-RPC）由 core 内部消化。</p>
+
+<div class="note">
+<strong>零改动集成判例（M4c 实测）：</strong>GATT 与 SPP 两种 port 接入同一份 core 源码，core 侧一行未改。两种通道唯一的差异就是 port 填进 <code>bt_mcp_chan_cap_t</code> 的取值。
+</div>
+
+<div class="toc">
+<a href="#arch">1 · 分层架构与职责边界</a>
+<a href="#cap">2 · 通道能力 bt_mcp_chan_cap_t</a>
+<a href="#frame">3 · 帧格式与分片</a>
+<a href="#ctrl">4 · 控制帧</a>
+<a href="#session">5 · 会话层 L4</a>
+<a href="#api">6 · core API 参考（L3/L4/L5）</a>
+<a href="#ports">7 · Port 适配器参考实现</a>
+<a href="#wire">8 · 接线模式：GATT 与 SPP</a>
+<a href="#jrpc">9 · JSON-RPC 消息集</a>
+<a href="#err">10 · 错误码与常量</a>
+<a href="#time">11 · 时序与超时</a>
+<a href="#gattsvc">12 · GATT 服务定义</a>
+<a href="#checklist">13 · 集成检查清单</a>
+</div>
+
+<h2 id="arch"><span class="no">1</span>分层架构与职责边界</h2>
+
+<div class="flow">┌───────────────────────────────┐
+│  L5  mcp_server               │  JSON-RPC 分派（initialize/tools/call…）
+├───────────────────────────────┤
+│  L4  session                  │  状态门 IDLE→LINK_UP→READY、信用窗口、RESUME
+├───────────────────────────────┤
+│  L3  frame                    │  0xB7 分帧 / 重组（协议核心，零 OS 依赖）
+├───────────────────────────────┤  ▲ 回调上抛（msg_sink）
+│  L2  transport（port）        │  ← 宿主实现区：bt_mcp_chan_cap_t + emit/送达
+└───────────────────────────────┘  ▼ 发射 emit(io, data, len)</div>
+
+<p>依赖严格单向向下：<code>L5→L4→L3→L2</code>；反向数据只经注册回调（上抛 sink、发射 emit）。core 只通过一个结构体 <code>bt_mcp_chan_cap_t</code> 感知通道差异，<strong>core 源码中没有任何 vendor ifdef</strong>。</p>
+
+<h3>宿主职责一览</h3>
+<table>
+<tr><th>事项</th><th>谁负责</th><th>说明</th></tr>
+<tr><td>连接建立/断开事件</td><td>宿主</td><td>translate 为 <code>session_link_up / link_down</code> 调用</td></tr>
+<tr><td>通道 MTU 与类型</td><td>宿主</td><td>写进 <code>bt_mcp_chan_cap_t</code>（GATT：<code>ATT_MTU−3</code>）</td></tr>
+<tr><td>发射（设备→对端）</td><td>core→宿主</td><td>core 经 emit 回调吐帧字节；宿主投到 GATT notify / SPP write</td></tr>
+<tr><td>送达（对端→设备）</td><td>宿主→core</td><td>宿主在收到数据时调用 <code>framer_feed</code>（流通道可任意切分）</td></tr>
+<tr><td>时间</td><td>宿主</td><td>周期调用 <code>session_tick(framer_tick)(now_ms)</code>；core 内部无时钟</td></tr>
+<tr><td>MCP 工具实现</td><td>应用层</td><td>编译期 const 工具表传入 <code>server_cfg</code>，运行期零注册 RAM</td></tr>
+</table>
+
+<h2 id="cap"><span class="no">2</span>通道能力 bt_mcp_chan_cap_t</h2>
+
+<p>core 对通道的全部假设就这一个结构体（<code>core/include/bt_mcp/capability.h</code>）：</p>
+
+<pre><code><span class="k">typedef enum</span> {
+    BT_MCP_CHAN_PACKET = 0, <span class="c">/* 包语义：有 MTU、可能丢、无跨包边界（GATT、CoC） */</span>
+    BT_MCP_CHAN_STREAM = 1  <span class="c">/* 流语义：字节流有序可靠（SPP、RFCOMM、UART） */</span>
+} bt_mcp_chan_kind_t;
+
+<span class="k">typedef struct</span> bt_mcp_chan_cap {
+    bt_mcp_chan_kind_t kind;
+    uint16_t mtu;             <span class="c">/* 单次 send payload 上限；流通道填 0 = 无限 */</span>
+    uint8_t  reliable   : 1;  <span class="c">/* 1 = 送达有序可靠 */</span>
+    uint8_t  flow_ctrl  : 1;  <span class="c">/* 1 = 通道自带流控，L4 免信用 */</span>
+    uint8_t  max_pending : 4; <span class="c">/* 建议同时在途消息数（= 对端重组槽数） */</span>
+} bt_mcp_chan_cap_t;</code></pre>
+
+<table>
+<tr><th>承载</th><th>kind</th><th>mtu</th><th>reliable</th><th>flow_ctrl</th><th>备注</th></tr>
+<tr><td>GATT notify/write</td><td><code>PACKET</code></td><td>协商 <code>ATT_MTU−3</code>（未知取 20 保守值）</td><td>0</td><td>0</td><td>需 L3 分片 + L4 信用</td></tr>
+<tr><td>SPP / RFCOMM</td><td><code>STREAM</code></td><td>0（无界）</td><td>1</td><td>1</td><td>帧直连发，序号仅作同步</td></tr>
+<tr><td>L2CAP LE CoC</td><td><code>PACKET</code></td><td>CoC MTU</td><td>1</td><td>1</td><td>免信用，仅保留分片</td></tr>
+<tr><td>自定义 UART/USB-CDC</td><td><code>STREAM</code></td><td>0</td><td>1</td><td>0</td><td>无链路校验时编译期开 <code>BT_MCP_CFG_FCS16</code></td></tr>
+</table>
+
+<h2 id="frame"><span class="no">3</span>帧格式与分片</h2>
+
+<h3>3.1 帧头（小端 6B）</h3>
+
+<div class="bytegrid">
+  <div class="byte"><div class="hb">0xB7</div><div class="lb">magic</div></div>
+  <div class="byte"><div class="hb">flags</div><div class="lb">bit0..2</div></div>
+  <div class="byte"><div class="hb">seq</div><div class="lb">消息序号 u8</div></div>
+  <div class="byte"><div class="hb">idx</div><div class="lb">分片号 u8</div></div>
+  <div class="byte"><div class="hb">len (LE u16)</div><div class="lb">本片 payload 字节</div></div>
+</div>
+
+<table>
+<tr><th>flags 位</th><th>宏</th><th>含义</th></tr>
+<tr><td>bit0 = 0x01</td><td><code>BT_MCP_FLAG_LAST</code></td><td>本消息末片</td></tr>
+<tr><td>bit1 = 0x02</td><td><code>BT_MCP_FLAG_CHUNK</code></td><td>本消息分多片（消息首片即置位，控制帧恒单片）</td></tr>
+<tr><td>bit2 = 0x04</td><td><code>BT_MCP_FLAG_CTRL</code></td><td>控制帧（见 §4）</td></tr>
+</table>
+
+<ul>
+<li><code>seq</code>：发送侧跨消息自增 mod 256；同一消息的全部分片共享同一 seq。</li>
+<li><code>idx</code>：分片号严格递增（0,1,2…），重组侧按 <code>next_idx</code> 校验。</li>
+<li>协议无 CRC：BLE 链路层/RFCOMM/CoC 已含校验；流通道失步由 magic+len 语法校验承担。无链路校验的自定义 UART 可编译期置 <code>BT_MCP_CFG_FCS16=1</code> 追加 2 字节 CRC16-CCITT。</li>
+</ul>
+
+<h3>3.2 两条通道的分片行为差异（M4c 实测判例）</h3>
+
+<table>
+<tr><th></th><th>流通道（SPP）</th><th>包通道（GATT）</th></tr>
+<tr><td>发送形态</td><td>单帧承载整条消息（len ≤ 8192），无分片</td><td>按 <code>min(mtu, 255)</code> 分多片，每片独立帧头</td></tr>
+<tr><td>emit 次数</td><td>1 帧 = 2 次 emit（hdr 6B + payload）</td><td>每片 2 次 emit（hdr + payload）</td></tr>
+<tr><td>feed 喂法</td><td>任意字节段（1B~7B 混合切分实测全量重组成功）</td><td>须按片边界喂（一个 GATT notify 一次 feed）</td></tr>
+<tr><td>重组资源</td><td>流解析器状态机（逐字节语法）</td><td>重组槽 <code>max_reasm</code>（默认 4）× 8192B</td></tr>
+</table>
+
+<div class="note warn">
+<strong>最易踩坑：</strong>framer 对每片 emit <strong>两次</strong>（6B 头一次、payload 一次），而 GATT notify 是 <em>hdr+payload 一体到达</em>。宿主若把 emit 直接落到 notify 队列，须在 emit 侧做片聚合（hdr 开新缓冲、payload 追加同缓冲），见 §7.2；或直接复用参考实现 <code>gatt_port.h</code>。
+</div>
+
+<h2 id="ctrl"><span class="no">4</span>控制帧</h2>
+
+<p>控制帧（<code>flags bit2=1</code>）恒单片 ≤ 255B，payload 首字节为类型：</p>
+
+<table>
+<tr><th>type</th><th>宏</th><th>参数（payload 后续）</th><th>方向</th><th>用途</th></tr>
+<tr><td>0x01</td><td><code>BT_MCP_CTRL_CREDIT</code></td><td>u16 credits（增量回补，u8 截断 <code>&amp;0xFF</code>）</td><td>双向</td><td>包通道信用回补</td></tr>
+<tr><td>0x02</td><td><code>BT_MCP_CTRL_PING</code></td><td>u8 epoch</td><td>双向</td><td>活性探测</td></tr>
+<tr><td>0x03</td><td><code>BT_MCP_CTRL_RESUME_REQ</code></td><td>u32 token</td><td>C→S</td><td>会话恢复请求</td></tr>
+<tr><td>0x04</td><td><code>BT_MCP_CTRL_RESUME_OK</code></td><td>u32 token</td><td>S→C</td><td>恢复确认</td></tr>
+<tr><td>0x05</td><td><code>BT_MCP_CTRL_RESUME_REJ</code></td><td>u8 reason</td><td>S→C</td><td>恢复拒绝（token 已作废）</td></tr>
+</table>
+
+<p>宿主一般不直接构造控制帧——用 <code>bt_mcp_session_ctrl()</code> 发、由 <code>bt_mcp_session_rx()</code> 收并内部消化（见 §6.2）。</p>
+
+<h2 id="session"><span class="no">5</span>会话层 L4：状态机与状态门</h2>
+
+<div class="flow">IDLE ──link_up(token)──▶ LINK_UP ──initialize 完成──▶ READY
+ ▲                        │  允许 RESUME / initialize 粗门      MCP 全量 + CREDIT/PING
+ └──────link_down(bond)────┘◀──────────────────────────────┘</div>
+
+<table>
+<tr><th>状态</th><th>允许收</th><th>允许发</th><th>门行为（违例返回）</th></tr>
+<tr><td><code>IDLE</code></td><td>无（拒收一切）</td><td>无</td><td>rx → <code>E_STATE</code></td></tr>
+<tr><td><code>LINK_UP</code></td><td>控制帧 + initialize 形态</td><td>控制帧 + initialize</td><td>其他 MCP → 丢弃/拒绝</td></tr>
+<tr><td><code>READY</code></td><td>MCP 全量 + 控制帧</td><td>MCP（受信用）+ 控制</td><td>—</td></tr>
+</table>
+
+<ul>
+<li><strong>initialize 粗门（LINK_UP 期）</strong>：payload 以 <code>initialize</code> / <code>"initialize</code> / <code>{"jsonrpc</code> 前缀开头且 ≥ 9B 才放行。</li>
+<li><strong>信用窗口（仅包通道）</strong>：每发一条 MCP 消息扣 1 credit（初值 = <code>tx_window</code>，默认 4）；窗口 0 时 <code>session_tx</code> → <code>E_AGAIN</code>，须等对端 CREDIT 回补或 tick 重试。流通道（<code>flow_ctrl=1</code>）免信用。</li>
+<li><strong>link_up 重置</strong>：每次 <code>link_up</code> 重置 credits 与重组状态。</li>
+<li><strong>RESUME token 绑 bond</strong>：断链时 <code>link_down(bond_intact)</code>；bond=0（配对丢失）则 token 清零，之后同 token 的 RESUME_REQ 会被拒绝。</li>
+</ul>
+
+<h2 id="api"><span class="no">6</span>core API 参考</h2>
+
+<h3>6.1 L3 frame（<code>bt_mcp/frame.h</code>）</h3>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_framer_init(bt_mcp_framer_t *f, const bt_mcp_frame_cfg_t *cfg, const bt_mcp_chan_cap_t *cap)</div>
+<div class="sig-b">
+<p>绑定通道能力。宿主持有 framer 实例与 cap 结构体（cap 生命周期须覆盖 framer，framer 只存指针）。<br>
+<code>bt_mcp_frame_cfg_t{ max_reasm=4, frag_tout_ms=2000 }</code>（0 = 用编译期默认）。</p>
+</div></div>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_framer_send(bt_mcp_framer_t *f, uint8_t kind, const uint8_t *payload, uint32_t len, int (*emit)(void*, const uint8_t*, uint16_t), void *io)</div>
+<div class="sig-b">
+<p>整条消息 → 按片经 emit 吐出。<code>kind</code> = <code>BT_MCP_KIND_MCP(0)</code> / <code>BT_MCP_KIND_CTRL(1)</code>。<br>
+emit 返回非 0（如 port 的 <code>E_NOMEM</code>）会透传给调用链（背压语义）。发送路径无暂态，恒可算。</p>
+</div></div>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len, bt_mcp_msg_sink_t sink, void *user)</div>
+<div class="sig-b">
+<p>喂原始接收字节。包通道喂完整片；流通道喂任意字节段。重组完成的完整消息经 sink 上抛：</p>
+<pre><code><span class="k">typedef void</span> (*bt_mcp_msg_sink_t)(<span class="k">void</span> *user, uint8_t kind,
+                                  <span class="k">const</span> uint8_t *payload, uint16_t len);
+<span class="c">/* kind: BT_MCP_KIND_MCP=0 / BT_MCP_KIND_CTRL=1 */</span></code></pre>
+<p>若宿主绑定了 session（正常路径），宿主不直接调 feed，而是在送达回调里经 <code>session_rx</code> 转投（或直接把 sink 指到 session 的内部入口——mock 即此法）。</p>
+</div></div>
+
+<div class="sig">
+<div class="sig-h">void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms)</div>
+<div class="sig-b">重组超时回收（半帧滞留超过 <code>frag_tout_ms</code> 即回收槽位）。时间由调用方传入，core 无时钟。</div></div>
+
+<h3>6.2 L4 session（<code>bt_mcp/session.h</code>）</h3>
+
+<pre><code><span class="k">typedef struct</span> {
+    uint32_t req_timeout_ms;   <span class="c">/* 在途请求超时（默认 30000） */</span>
+    uint32_t resume_tout_ms;   <span class="c">/* RESUME_REQ 等待超时（默认 5000） */</span>
+    uint8_t  tx_window;        <span class="c">/* 包通道信用初值（= 对端重组槽数） */</span>
+    uint8_t  role;             <span class="c">/* BT_MCP_ROLE_SERVER=0 / CLIENT=1 */</span>
+} bt_mcp_session_cfg_t;
+
+<span class="k">typedef void</span> (*bt_mcp_mcp_sink_t)(<span class="k">void</span> *user, <span class="k">const</span> uint8_t *json, uint32_t len);</code></pre>
+
+<div class="sig">
+<div class="sig-h">int  bt_mcp_session_init(bt_mcp_session_t *s, const bt_mcp_session_cfg_t *cfg)</div>
+<div class="sig-h">void bt_mcp_session_bind(bt_mcp_session_t *s, bt_mcp_framer_t *fr, int (*emit)(void*, const uint8_t*, uint16_t), void *io)</div>
+<div class="sig-b"><p>把发射路径接上：session 的全部发送经绑定的 framer 分帧，emit 直通宿主 io（= port 实例）。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">void bt_mcp_session_link_up(bt_mcp_session_t *s, uint32_t resume_token) &nbsp;·&nbsp; void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact)</div>
+<div class="sig-b"><p><strong>宿主在蓝牙连接建立/断开时调用。</strong>link_up 清 credits/重组态并进入 LINK_UP；link_down 退 IDLE，<code>bond_intact=0</code> 时 token 一并作废。token 是绑定在 bond 上的会话恢复句柄（32 位，由 proxy 持久保存）。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, const uint8_t *payload, uint16_t len, bt_mcp_mcp_sink_t mcp_sink, void *user)</div>
+<div class="sig-b"><p>framer 上抛的完整消息入口。内部消化控制帧（CREDIT/RESUME/状态门），MCP 消息转 mcp_sink。设备端通常把 sink 指到 <code>bt_mcp_server_rx</code>。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len) &nbsp;·&nbsp; int bt_mcp_session_ctrl(bt_mcp_session_t *s, uint8_t type, const uint8_t *args, uint8_t args_len)</div>
+<div class="sig-b"><p>上行完整 MCP 消息（受信用窗口，满 → <code>E_AGAIN</code>）；控制帧发送（args_len ≤ 254，越限 → <code>E_TOOBIG</code>）。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms) &nbsp;·&nbsp; bt_mcp_state_t bt_mcp_session_state(const bt_mcp_session_t *s)</div>
+<div class="sig-b"><p>超时推进（内部会级联 framer_tick）；状态查询（IDLE/LINK_UP/READY）。</p></div></div>
+
+<h3>6.3 L5 mcp_server（<code>bt_mcp/mcp_server.h</code>）</h3>
+
+<pre><code><span class="c">/* 工具授权级别 */</span>
+#define BT_MCP_AUTHZ_OPEN       0
+#define BT_MCP_AUTHZ_CONSENT    1
+#define BT_MCP_AUTHZ_RESTRICTED 2
+
+<span class="k">typedef int</span> (*bt_mcp_tool_fn)(<span class="k">const</span> bt_mcp_json_req_t *req,
+                              bt_mcp_writer_t *out, <span class="k">void</span> *user);
+
+<span class="k">typedef struct</span> {                    <span class="c">/* 编译期 const 工具表，运行期零注册 RAM */</span>
+    <span class="k">const</span> <span class="k">char</span> *name, *desc, *input_schema_json;
+    uint8_t        authz;
+    bt_mcp_tool_fn fn;
+    <span class="k">void</span>          *user;
+} bt_mcp_tool_def_t;
+
+<span class="k">typedef struct</span> {
+    <span class="k">const</span> bt_mcp_tool_def_t     *tools;      uint16_t tools_count;
+    <span class="k">const</span> bt_mcp_resource_def_t *resources;  uint16_t resources_count;
+} bt_mcp_server_cfg_t;</code></pre>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s, const bt_mcp_server_cfg_t *cfg, const char *fw_name, const char *fw_version)</div>
+<div class="sig-b"><p>挂上 session 与工具表。协议握手响应 <code>initialize</code> 自动应答：protocolVersion <code>2025-11-25</code>、serverName <code>bt-mcp-device</code>、serverVersion <code>0.2</code>。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)</div>
+<div class="sig-b"><p>session 上抛的 MCP 消息入口：SAX 解析 → 分派 → 响应经 <code>session_tx</code> 自动回程。响应缓冲为静态 <code>rbuf[8192]</code>，超限判 <code>E_TOOBIG</code>。</p></div></div>
+
+<div class="sig">
+<div class="sig-h">void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms) &nbsp;·&nbsp; int bt_mcp_server_notify(bt_mcp_server_t *sv, const char *method, const char *params_json, uint32_t params_len)</div>
+<div class="sig-b"><p>时钟推进；设备主动通知（S→C，params 为内嵌 params 对象原文）。</p></div></div>
+
+<h2 id="ports"><span class="no">7</span>Port 适配器参考实现（M4c 交付）</h2>
+
+<p>core 侧零改动；port 只是 framer emit 回调的直接落点。两份头文件在 <code>port/bt_mcp/</code> 下，模型是「环形线路缓冲」：emit 写入、drain 冲出（= GATT subsystem 已送达 / SPP socket recv 到达）。</p>
+
+<h3>7.1 GATT 适配器（<code>gatt_port.h</code>）</h3>
+
+<pre><code><span class="k">typedef struct</span> {
+    bt_mcp_chan_cap_t cap;             <span class="c">/* kind=PACKET，mtu=ATT_MTU−3 */</span>
+    uint8_t  ring[BT_MCP_CFG_MAX_MSG]; <span class="c">/* 发送 FIFO */</span>
+    uint32_t head, tail;                <span class="c">/* 单调递增，模容量 */</span>
+    uint32_t drop;                      <span class="c">/* 溢出丢弃计数 */</span>
+} bt_mcp_gatt_port_t;
+
+int       bt_mcp_gatt_port_init(bt_mcp_gatt_port_t *p, uint16_t att_mtu);
+          <span class="c">/* cap.mtu = att_mtu−3（ATT 头 3B 预扣）；&lt;20 → E_ARGS */</span>
+uint32_t  bt_mcp_gatt_port_used(const bt_mcp_gatt_port_t *p);
+int       bt_mcp_gatt_emit(void *io, const uint8_t *data, uint16_t len);
+          <span class="c">/* 溢出 → drop++ 并返回 E_NOMEM（= GATT buffer pool 耗尽，
+             framer_send 透传，session_tx 上抛——即背压语义） */</span>
+uint32_t  bt_mcp_gatt_drain(bt_mcp_gatt_port_t *p, uint8_t *out, uint32_t len);</code></pre>
+
+<h3>7.2 必须理解的判例：emit 双次调用 vs notify 一体到达</h3>
+
+<p>framer 对每片调用 emit <strong>两次</strong>（先 6B 帧头、后 payload）；真实 GATT 栈的一个 notify（或 write）承载的是 <em>hdr+payload 一体</em>。宿主接入时的两种正确姿势：</p>
+
+<ol>
+<li><strong>片旁路聚合（HIL 实测配方）</strong>：emit 侧记录——收到 6B 头开新缓冲，payload 追加同缓冲；之后每个缓冲一次 <code>framer_feed</code>（= 一个 notify 一次喂入）。M4c 判例：mtu=23 时 84B 消息拆 ≥4 notify，逐 notify 直通 feed 重组成功。</li>
+<li><strong>双特性法</strong>：把 6B 头与 payload 各投不同特性（如 Up 特性收头、Dn 收体）——不需要，且浪费一次写事务；仅列出以备栈不支持聚合时。</li>
+</ol>
+
+<h3>7.3 SPP 适配器（<code>spp_port.h</code>）</h3>
+
+<pre><code><span class="k">typedef struct</span> {
+    bt_mcp_chan_cap_t cap;             <span class="c">/* kind=STREAM，mtu=0 无限 */</span>
+    uint8_t  ring[BT_MCP_CFG_MAX_MSG];
+    uint32_t head, tail;  uint32_t drop;
+} bt_mcp_spp_port_t;
+
+int       bt_mcp_spp_port_init(bt_mcp_spp_port_t *p);
+uint32_t  bt_mcp_spp_port_used(const bt_mcp_spp_port_t *p);
+int       bt_mcp_spp_emit(void *io, const uint8_t *data, uint16_t len);
+uint32_t  bt_mcp_spp_drain(bt_mcp_spp_port_t *p, uint8_t *out, uint32_t len);</code></pre>
+
+<p>流通道 feed 无片边界要求：任意字节段（1B~7B 混合切分实测）逐段喂 <code>framer_feed</code> 即完成重组。ring 回绕单调 head/tail 判满判空（40 轮回绕不丢字节实测）。</p>
+
+<h2 id="wire"><span class="no">8</span>接线模式</h2>
+
+<h3>8.1 设备端（GATT server，跑 core 的 L3+L4+L5）</h3>
+
+<pre><code><span class="c">/* 初始化（一次性） */</span>
+bt_mcp_gatt_port_t gp;
+bt_mcp_framer_t    fr;
+bt_mcp_session_t   sess;
+bt_mcp_server_t    srv;
+
+bt_mcp_gatt_port_init(&amp;gp, att_mtu);            <span class="c">/* 247 → cap.mtu=244 */</span>
+bt_mcp_frame_cfg_t  fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
+bt_mcp_framer_init(&amp;fr, &amp;fcfg, &amp;gp.cap);
+bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, BT_MCP_ROLE_SERVER };
+bt_mcp_session_init(&amp;sess, &amp;scfg);
+bt_mcp_session_bind(&amp;sess, &amp;fr, bt_mcp_gatt_emit, &amp;gp);
+bt_mcp_server_init(&amp;srv, &amp;sess, &amp;my_tools_cfg, "my-fw", "1.0");
+
+<span class="c">/* —— 蓝牙栈事件 → core —— */</span>
+on_connect:      bt_mcp_session_link_up(&amp;sess, token);
+on_disconnect:   bt_mcp_session_link_down(&amp;sess, bond_intact);
+on_notify_sent:  (无操作；FIFO 由栈自然冲出)
+on_char_write:   /* 片聚合后逐片 */ bt_mcp_framer_feed(&amp;fr, chunk, n, <span class="c">/* sink→session_rx→server_rx */</span>);
+on_1ms_timer:    bt_mcp_session_tick(&amp;sess, now_ms);</code></pre>
+
+<h3>8.2 客户端/Proxy 侧（跑 core 的 L3+L4，L5 由宿主 MCP client 替代）</h3>
+
+<pre><code>bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, BT_MCP_ROLE_CLIENT };
+<span class="c">/* tx 前 wrap emit 做片聚合（若包通道），rx 侧收 server 响应喂 feed； */</span>
+<span class="c">/* 信用窗口烧干时 session_tx 返回 E_AGAIN——缓存消息、CREDIT 到手或 tick 后重发 */</span>
+<span class="c">/* 重连时：link_up 后先发 RESUME_REQ(token)；收 RESUME_OK 则跳过 initialize */</span></code></pre>
+
+<h3>8.3 端到端时序（GATT 流）</h3>
+
+<div class="flow">Proxy(phone)                         Device(BT-MCP)
+   │ ATT_MTU 交换 (247)                      │
+   │ ── link_up(token) ─────────────────▶ │ link_up
+   │ ── notify/write: initialize ───────▶ │ 粗门放行 → L5 应答
+   │ ◀─ notify: initialize result ──────── │ (protocolVersion 2025-11-25)
+   │ ── notifications/initialized ──────▶ │ initialized=1 → READY
+   │ ── tools/list ────────────────────▶ │ 信用扣 1
+   │ ◀─ 工具表 ─────────────────────────── │ CREDIT 回补
+   │ ── tools/call ─────────────────────▶ │ 工具执行 → result
+   │     （断链）link_down(bond=1) 保留 token │
+   │ ── RESUME_REQ(token) ─────────────▶ │ RESUME_OK / REJ(reason)</code></div>
+
+<h2 id="jrpc"><span class="no">9</span>JSON-RPC 消息集（L5）</h2>
+
+<table>
+<tr><th>method</th><th>方向</th><th>处理</th></tr>
+<tr><td><code>initialize</code></td><td>C→S</td><td>立即应答 capabilities（{server,client}）；serverName=bt-mcp-device / 0.2 / 2025-11-25</td></tr>
+<tr><td><code>notifications/initialized</code></td><td>C→S</td><td>通知（无 id）→ 置 <code>initialized=1</code>，会话进入全量态</td></tr>
+<tr><td><code>ping</code></td><td>C↔S</td><td>应答 <code>pong</code></td></tr>
+<tr><td><code>tools/list</code></td><td>C→S</td><td>返回工具表（name/desc/inputSchema/authz）</td></tr>
+<tr><td><code>tools/call</code></td><td>C→S</td><td>params.arguments 嫁接为工具参数视图；执行 fn → 流式 writer 输出 result</td></tr>
+<tr><td>其他 method</td><td>C→S</td><td><code>-32601</code> Method not found</td></tr>
+<tr><td>未 initialize 即调用</td><td>C→S</td><td><code>-32002</code>（或 <code>E_STATE</code> 门挡在前）</td></tr>
+<tr><td>malformed 定位 id</td><td>—</td><td><code>-32700</code> Parse error</td></tr>
+</table>
+
+<p>工具参数取值：<code>tools/call</code> 的参数在 <code>params.arguments</code> 嵌套层，core 的 JSON SAX 用 <code>bt_mcp_json_get_sub</code> 把 arguments 片段嫁接成工具视图，工具回调签名不变。响应 writer 零中间 DOM、双层转义。</p>
+
+<h2 id="err"><span class="no">10</span>错误码与编译期常量</h2>
+
+<pre><code>BT_MCP_OK       =  0
+BT_MCP_E_AGAIN  = -1   <span class="c">/* 缓冲/窗口暂满，稍后 tick 重试（包通道信用耗尽最常见） */</span>
+BT_MCP_E_ARGS   = -2   <span class="c">/* 参数非法（如 att_mtu&lt;23 → mtu&lt;20） */</span>
+BT_MCP_E_STATE  = -3   <span class="c">/* 当前会话状态不接受此操作（IDLE 收包等） */</span>
+BT_MCP_E_TOOBIG = -4   <span class="c">/* 超 8KB 消息上限 / 分片超限 / ctrl args&gt;254 / 响应 rbuf 满 */</span>
+BT_MCP_E_NOMEM  = -5   <span class="c">/* 静态池耗尽（重组槽/线路缓冲满） */</span>
+BT_MCP_E_SYNC   = -6   <span class="c">/* 流失步 / 重组校验失败（乱序分片） */</span>
+BT_MCP_E_PARSE  = -7   <span class="c">/* JSON/参数解析失败 */</span>
+BT_MCP_E_IO     = -8   <span class="c">/* 底层 sink/transport 写失败 */</span></code></pre>
+
+<table>
+<tr><th>常量（<code>config.h</code>）</th><th>默认</th><th>含义</th></tr>
+<tr><td><code>BT_MCP_CFG_MAX_MSG</code></td><td>8192</td><td>单消息字节上限（流通道单帧；响应 rbuf 同尺寸）</td></tr>
+<tr><td><code>BT_MCP_CFG_MAX_REASM</code></td><td>4</td><td>对端重组槽数（= 我方建议 max_pending）</td></tr>
+<tr><td><code>BT_MCP_CFG_MAX_FRAG</code></td><td>32</td><td>单消息分片上限（8KB/244B≈34→32 封顶需分页）</td></tr>
+<tr><td><code>BT_MCP_CFG_FRAG_TOUT_MS</code></td><td>2000</td><td>半帧重组超时回收</td></tr>
+<tr><td><code>BT_MCP_CFG_FCS16</code></td><td>0</td><td>通道无链路校验（自定义 UART）时置 1</td></tr>
+<tr><td><code>BT_MCP_MAX_CHUNK_PAYLOAD</code></td><td>255</td><td>单片 payload 上限（控制帧恒单片 ≤255B）</td></tr>
+</table>
+
+<h2 id="time"><span class="no">11</span>时序与超时参数</h2>
+
+<table>
+<tr><th>参数</th><th>默认值</th><th>归属</th><th>触发行为</th></tr>
+<tr><td><code>req_timeout_ms</code></td><td>30000</td><td>session_cfg</td><td>在途请求超时（单槽时间戳记账）</td></tr>
+<tr><td><code>resume_tout_ms</code></td><td>5000</td><td>session_cfg</td><td>RESUME_REQ 等待 OK/REJ 超时</td></tr>
+<tr><td><code>tx_window</code></td><td>4</td><td>session_cfg</td><td>包通道信用初值；窗口 0 → <code>E_AGAIN</code></td></tr>
+<tr><td><code>frag_tout_ms</code></td><td>2000</td><td>frame_cfg</td><td>半帧滞留回收重组槽</td></tr>
+</table>
+
+<p class="meta">所有时间戳由宿主 tick 注入（毫秒、自由运行）；core 内部不读任何时钟、不建线程。建议 1~10ms 周期调 <code>session_tick</code>（内部级联 framer/server tick）。</p>
+
+<h2 id="gattsvc"><span class="no">12</span>GATT 服务定义</h2>
+
+<table>
+<tr><th>特征</th><th>性质</th><th>用途</th></tr>
+<tr><td>Ctrl</td><td>notify + write</td><td>主数据通道（MCP 帧分片，ATT_MTU−3）</td></tr>
+<tr><td>Dn（下行）</td><td>notify</td><td>设备→Proxy 方向（可并入 Ctrl 的 notify 侧）</td></tr>
+<tr><td>Up（上行）</td><td>write-no-rsp</td><td>Proxy→设备方向</td></tr>
+</table>
+
+<p>SPP 则在 SDP 注册 SPP UUID、开 RFCOMM 通道，同一二进制零差异运行——唯一区别是 port 填的 <code>bt_mcp_chan_cap_t</code>。L2CAP LE CoC 可选：credit 回调映射到 <code>cap.flow_ctrl=1</code>，L4 免信用。</p>
+
+<h2 id="checklist"><span class="no">13</span>集成检查清单</h2>
+
+<ol>
+<li><strong>编译</strong>：C99、零 OS 依赖。core 五个 .c（frame/session/json/writer/mcp_server）+ port 两个头，直接编入固件。禁用 GNU 扩展（<code>-std=c99 -Werror</code> 可过）。</li>
+<li><strong>cap 正确</strong>：GATT mtu = <code>ATT_MTU−3</code> 且 ≥ 20；SPP mtu=0、kind=STREAM。</li>
+<li><strong>emit 聚合</strong>（仅 GATT）：hdr(6B) 开新 notify 缓冲、payload 追加同缓冲，逐 notify <code>framer_feed</code>。</li>
+<li><strong>状态门</strong>：连接事件必须打到 <code>link_up/link_down</code>；断链带 bond_intact；token 绑 bond 持久。</li>
+<li><strong>背压</strong>：处理 <code>E_AGAIN</code>（信用耗尽，缓存重发）与 port 的 <code>E_NOMEM</code>+drop（线路缓冲满，需加大 drain 频率）。</li>
+<li><strong>时钟</strong>：周期 <code>session_tick(now_ms)</code>；否则半帧超时/RESUME 超时永不触发。</li>
+<li><strong>工具表</strong>：const 编译期表 + input_schema_json 字符串 + authz 级别（OPEN/CONSENT/RESTRICTED，授权 UI 由宿主实现）。</li>
+<li><strong>验收基线</strong>：参考仓库全量回归 = 1335 项差分 + 184 项 port HIL + fuzz 10 亿轮零崩溃。最小 E2E 验收 = <code>initialize → notifications/initialized → tools/list → tools/call → ping</code> 全链路（含 mtu=23 分片链路）。</li>
+</ol>
+
+<hr style="margin-top:48px;border:none;border-top:1px solid var(--border)">
+<p class="meta">BT-MCP v0.2 草案全文见 <code>~/bt-mcp-core-draft.md</code>；源码 <code>~/bt-mcp/core</code> + <code>~/bt-mcp/port</code>。当前发布：1319 项协议差分检查 + 184 项 port HIL 全绿，fuzz 10 亿轮 ZERO CRASH（2026-11-04）。</p>
+</div>

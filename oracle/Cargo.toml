@@ -1,0 +1,11 @@
+[package]
+name = "bt-mcp-oracle"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "oracle"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
