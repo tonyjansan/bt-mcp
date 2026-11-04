@@ -46,4 +46,4 @@ cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include -Iport \
    -o build/test_m4c_port && ./build/test_m4c_port
 ```
 
-Protocol draft: `~/bt-mcp-core-draft.md` (BT-MCP v0.2).
+Protocol draft: [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) (BT-MCP v0.2).
