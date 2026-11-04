@@ -1,0 +1,344 @@
+# BT-MCP 核心协议草案 v0.2 —— 平台无关设计
+
+日期：2026-11-03 · 状态：草案
+本版相对 v0.1 的关键变化：**剥离一切具体芯片/厂商假设**，承载通道扩展为 GATT / SPP(RFCOMM) / L2CAP CoC / 串行字节流统一模型，分帧与接口用标准 C99 概要描述。
+
+---
+
+## 1. 设计原则
+
+1. **协议核心不感知蓝牙**：core/ 只看到「带 MTU 语义的发送通道 + 字节/包回调 + 连接状态事件」。GATT、SPP、CoC、甚至 USB-CDC/UART 都是同一抽象的一个 port。
+2. **两类通道，一套帧格式**：
+   - **包通道**（GATT notify/write、L2CAP CoC）：有 MTU、可能丢包/无跨包边界保证 → 帧层带序号与分片重组；
+   - **流通道**（SPP/RFCOMM、UART、USB-CDC）：字节流有序可靠 → 同一帧格式直接连发，序号退化为对齐/丢弃用途。
+   两种通道**共用同一帧格式**（流通道多付 4 字节/帧头的成本，换取实现唯一性与互操作性）。
+3. **最大平台兼容**：core/ 为纯 C99、无 OS 调用、无芯片头文件、无动态分配（编译期可切静态池）、无 `#ifdef <vendor>`。RTOS 与裸机（主循环轮询 `*_tick()`）均可驱动。
+4. **MCP 语义严格子集**：线上字节与标准 MCP（JSON-RPC 2.0）互通，裁剪面在 §5。
+5. **不锚定任何手机 OS**：手机/网关侧 Bridge 是配套件而非协议一部分；协议只定义设备端与 Bridge 之间的空中字节。
+
+## 2. 层次与模块总览
+
+```
+L6  provider      设备业务（传感器/工具/资源表，编译期注册）
+L5  mcp_server    JSON-RPC 编解码、方法分派、能力声明、超时/取消/进度
+L4  session       会话状态机、请求-响应关联、信用流控、断链恢复
+L3  frame         分帧/分片/重组、序号去重、通道类型自适应
+L2  transport      通道抽象（port 实现：GATT / SPP / CoC / UART / host-mock）
+L1  （任意蓝牙协议栈：vendor host、Zephyr、bluedroid…仅 port 层接触）
+```
+
+依赖方向严格单向向下：L6→L5→L4→L3→L2；反向通信只经注册的回调（下行数据、事件）。
+**所有模块为非阻塞、事件驱动、单写者模型**：任意时刻只有一个执行上下文进入协议栈（裸机主循环或单一协议线程），port 层负责把 ISR/栈回调投递进该上下文（队列/信号量由 port 提供）。
+
+## 3. 通道抽象与能力协商
+
+core/ 对通道的全部知识收敛为一个能力描述符，由 port 在连接建立时填写：
+
+```c
+/* bt_mcp/capability.h —— core 对通道的全部假设仅此一个结构体 */
+typedef enum {
+    BT_MCP_CHAN_PACKET = 0,   /* 包语义：有 MTU 上限，帧可能不达（队列满/链路丢），
+                                 无跨包边界保证（GATT notify、L2CAP CoC） */
+    BT_MCP_CHAN_STREAM = 1    /* 流语义：字节流有序可靠（SPP、RFCOMM、USB-CDC、UART） */
+} bt_mcp_chan_kind_t;
+
+typedef struct bt_mcp_chan_cap {
+    bt_mcp_chan_kind_t kind;
+    uint16_t mtu;             /* 单次 send() 的 payload 上限；流通道填 0 表示无限 */
+    uint8_t  reliable : 1;    /* 1 = 送达有序可靠（流通道恒 1；CoC credit 下视为 1） */
+    uint8_t  flow_ctrl : 1;   /* 1 = 通道自带流控（CoC credit / RFCOMM credit），
+                                 0 = 需 L4 应用层信用 */
+    uint8_t  max_pending : 4; /* 建议同时在途消息数（包通道=重组缓冲槽数） */
+} bt_mcp_chan_cap_t;
+```
+
+各 Profile 的 port 填写示例：
+
+| Profile | kind | mtu | reliable | flow_ctrl | 说明 |
+|---|---|---|---|---|---|
+| GATT notify/write | PACKET | 协商 ATT_MTU−3（未知则 20 保守值） | 0 | 0 | 需 L3 分片 + L4 信用 |
+| GATT+LE CoC | PACKET | CoC MTU | 1 | 1 | 免信用，仅保留分片（MTU 可能仍 < 消息） |
+| SPP / RFCOMM | STREAM | 0（无界） | 1 | 1 | 帧直连发，序号仅作同步 |
+| USB-CDC / UART（调试与网关） | STREAM | 0 | 1* | 0 | *外部干扰仍可能，可选开校验 |
+
+协议版本/通道能力在 **MCP initialize 握手内**的 `_meta` 中互相声明（不占用额外空中往返）：
+
+```json
+{ "capabilities": { "tools": {...} },
+  "_meta": { "io.btmcp/chan": { "kind": 0, "mtu": 244, "window": 4 } } }
+```
+
+设备端以本地通道能力如实声明；两端各自按 min(自身, 对端) 收敛行为。任何一端不认识 `_meta.io.btmcp/*` 时按裸 MCP 语义退化（帧层照常工作，只是对端需按默认窗口发）。
+
+## 4. 分帧格式（L3）
+
+### 4.1 统一帧头（wire format，小端）
+
+```
+偏移  长度  字段        说明
+0     1    magic      0xB7（与常见 BLE 载荷/TLV 首字节冲突概率低）
+1     1    flags      bit0: FRAG_LAST（本消息最后一片）
+                      bit1: CHUNKED（分片消息；流通道单帧直发时=0）
+                      bit2: CTRL（控制帧：信用/心跳/resume，非 MCP 消息）
+2     1    seq        发送方递增序号（mod 256）；重传/去重/流对齐用
+3     1    idx        分片号（0..n-1，CHUNKED=0 时须为 0）
+4     2    len        本片载荷长度（小端 u16，不含帧头）
+6     n    payload    len 字节
+```
+
+- 头部定长 6 字节 + ≤255 字节载荷/片；片大小 = min(通道 MTU, 261) − 6。
+- **流通道同步**：magic + len 前缀天然自同步；接收端失步时扫到 magic 且 `len ≤ 255`、校验通过即恢复（流通道多付 6B/片的代价换来与包通道共用编解码器）。
+- **消息上限**：idx 8 位 → 最多 256 片 × 255B ≈ 65KB；v0.2 规定**单 MCP 消息 ≤ 8KB**（防止对端 RAM 勒索），更大 payload 一律走 resources 分页 URI（§5.3），违反上限回 `-32602`。
+- 无 CRC：蓝牙链路层（GATT over LE、RFCOMM/CoC L2CAP FCS）已含完整性校验；流通道失步检测由 magic+len 语法校验承担。若 port 声明通道无链路级校验（自定义 UART），编译期可开 `BT_MCP_CFG_FCS16` 追加 2 字节 CRC16-CCITT。
+
+### 4.2 控制帧（flags.CTRL=1）
+
+控制帧与数据帧共用头，payload 为 1 字节类型 + 参数，走任一通道方向：
+
+| type | 名称 | payload | 用途 |
+|---|---|---|---|
+| 0x01 | CREDIT | u16 credits | L4 应用层信用补给（包通道用） |
+| 0x02 | PING | u8 epoch | 应用层存活探针（可选周期；无则靠 MCP ping） |
+| 0x03 | RESUME_REQ | u32 token | 重连后请求恢复会话 |
+| 0x04 | RESUME_OK | u32 token | 同意恢复（回相同 token） |
+| 0x05 | RESUME_REJ | u8 reason | 拒绝（token 过期/bond 丢失）→ 双方回 IDLE |
+
+控制帧不解 JSON、不进 L5，在 L4 终结；这是唯一绕过 MCP 语义的旁路，用于「还没握手/已断语义」两种 MCP 管不到的状态。
+
+### 4.3 重组与去重
+
+- 包通道：按 `seq` 滑窗丢弃迟到重复片；重组槽 = 静态数组（槽数 = 通道能力 `max_pending`，编译期上限 `BT_MCP_CFG_MAX_REASM`，默认 4）。
+- 流通道：帧边界即消息边界（CHUNKED=0），重组器退化为「6B 头 + len 字节」的流解析器，同一份状态机代码、不同喂入路径。
+- 重组超时：跨片间隔 > `BT_MCP_CFG_FRAG_TOUT_MS`（默认 2000ms）丢弃整消息并回收槽位（防半帧占死缓冲）。
+
+## 5. 会话与 MCP 语义
+
+### 5.1 状态机（L4）
+
+```
+IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ READY
+ ▲                                │                     │
+ │                     RESUME_REQ │  RESUME_OK          │ 正常 MCP 流量
+ └───────────── 断链/超时 ────────▼──────────────────────┘
+```
+
+- READY 前只允许控制帧与 MCP initialize；READY 后只允许 MCP + CREDIT/PING。
+- 断链重连：先试 RESUME（1 往返，恢复 pending 请求映射与授权缓存），被拒或无 token 走完整握手。RESUME token 绑定 bond（见 §6），bond 丢失则 token 一并作废。
+- 包通道信用：对端重组槽数即我方发送窗口；CREDIT 帧按「已对端消费的消息数」增量补给。流通道 `flow_ctrl=1` 时 L4 直接放行（帧层自身不做重传——流通道语义已可靠）。
+
+### 5.2 MCP 子集（线上方法与标准 MCP 完全同形）
+
+保留：`initialize`、`notifications/initialized`、`tools/list`、`tools/call`、
+`resources/list`、`resources/read`、`notifications/resources/updated`、
+`notifications/progress`、`notifications/cancelled`、`ping`。
+
+裁剪（不声明 capabilities 即规范合法）：prompts / sampling / roots / elicitation /
+completions / logging / batch / OAuth。
+
+### 5.3 大 payload 分页约定
+
+resource URI 自带窗口与游标：`bt-mcp://<cat>/<name>?window=N&cursor=<token>`，
+响应为 `{ content, nextCursor? }`，与 tools/list 分页同形。分页让单消息上限固化
+在 8KB，任何档位 RAM 的设备都可实现完整资源面。
+
+## 6. 安全
+
+1. 强制要求蓝牙配对加密（LE：Secure Connections；Classic：SSP MITM 模式），由 port 层在 LINK_UP 前核验，未加密通道拒绝进入握手（调试编译期可豁免）。
+2. RESUME token 绑定 bond 标识（地址解析/链路密钥指纹），bond 删除即 token 失效；防「换手机静默继承会话」。
+3. 工具级授权：`open / consent / restricted` 三级，consent 弹窗确认在设备 UI（无 UI 设备则由 Bridge 端展示）；授权缓存随 session（resume 后失效，须重新确认 restricted 级）。
+4. 不做 OAuth/token——会话生命周期 = 加密链路 + bond 生命周期。
+
+## 7. C99 模块接口骨架
+
+约定：所有类型以 `bt_mcp_` 前缀；所有函数非阻塞、返回 `int`（0 成功，负值 = `BT_MCP_E*` 错误码）；时间一律由调用方传入 `now_ms`（无 OS 时钟依赖）。
+
+```c
+/* ===== bt_mcp/err.h ===== */
+enum {
+    BT_MCP_OK = 0,
+    BT_MCP_E_AGAIN  = -1,   /* 缓冲/窗口暂满，稍后 tick 重试 */
+    BT_MCP_E_ARGS   = -2,
+    BT_MCP_E_STATE  = -3,   /* 当前会话状态不接受此操作 */
+    BT_MCP_E_TOOBIG = -4,   /* 超 8KB 消息上限或分片超限 */
+    BT_MCP_E_NOMEM  = -5,   /* 静态池耗尽 */
+    BT_MCP_E_SYNC  = -6     /* 流失步/重组校验失败 */
+};
+
+/* ===== bt_mcp/transport.h —— L2：port 层实现，core 只调用 ===== */
+typedef struct bt_mcp_transport {
+    /* 连接建立时由 port 填写，core 只读 */
+    bt_mcp_chan_cap_t cap;
+
+    /* 非阻塞发送一片/一帧；返回 BT_MCP_E_AGAIN 表示通道忙，core 挂起重试。
+       stream 通道 len 无上限；packet 通道 len ≤ cap.mtu */
+    int (*send)(void *io, const uint8_t *data, uint16_t len);
+
+    /* 事件回调：port 在协议栈上下文内调用（port 负责线程/中断归一） */
+    void (*on_rx)(void *io, const uint8_t *data, uint16_t len);   /* 完整片/帧字节 */
+    void (*on_conn)(void *io, int up);   /* 1=连接建立(cap 已填), 0=断开 */
+} bt_mcp_transport_t;
+
+/* ===== bt_mcp/frame.h —— L3：纯协议，可宿主机 fuzz/golden ===== */
+typedef void (*bt_mcp_msg_sink_t)(void *user, uint8_t kind,
+                                  const uint8_t *payload, uint16_t len);
+    /* kind: 0=MCP 消息(完整重组) 1=控制帧(原样上抛 L4) */
+
+typedef struct {
+    /* 编译期配置注入（替代 #ifdef） */
+    uint8_t  max_reasm;      /* 重组槽数（包通道）；默认 4 */
+    uint16_t frag_tout_ms;
+} bt_mcp_frame_cfg_t;
+
+typedef struct bt_mcp_framer bt_mcp_framer_t;   /* 不透明，大小编译期定长 */
+
+int  bt_mcp_framer_init(bt_mcp_framer_t *f, const bt_mcp_frame_cfg_t *cfg,
+                        const bt_mcp_chan_cap_t *cap);
+/* 发送侧：整条消息 → 由 sink 按片吐出（core 把 sink 输出接 transport->send），
+   自动编 seq/idx/CHUNKED；包通道按 cap.mtu 切片，流通道单帧直发 */
+int  bt_mcp_framer_send(bt_mcp_framer_t *f, uint8_t kind,
+                        const uint8_t *payload, uint32_t len,
+                        int (*emit)(void*, const uint8_t*, uint16_t), void *io);
+/* 接收侧：喂入原始字节（片/流皆可），重组完成经 msg_sink 上抛 */
+int  bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
+                        bt_mcp_msg_sink_t sink, void *user);
+/* 每次主循环/协议线程节拍调用：驱动重组超时回收 */
+void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms);
+
+/* ===== bt_mcp/session.h —— L4 ===== */
+typedef enum {
+    BT_MCP_S_IDLE = 0, BT_MCP_S_LINK_UP, BT_MCP_S_READY
+} bt_mcp_state_t;
+
+typedef struct bt_mcp_session_cfg {
+    uint32_t req_timeout_ms;   /* 在途请求超时（默认 30000） */
+    uint32_t resume_tout_ms;
+    uint8_t  tx_window;        /* 包通道应用层信用初值（= 对端重组槽数） */
+} bt_mcp_session_cfg_t;
+
+typedef struct bt_mcp_session bt_mcp_session_t;
+
+int  bt_mcp_session_init(bt_mcp_session_t *s, const bt_mcp_session_cfg_t *cfg);
+void bt_mcp_session_bind(bt_mcp_session_t *s, bt_mcp_framer_t *f,
+                         bt_mcp_transport_t *t);
+bt_mcp_state_t bt_mcp_session_state(const bt_mcp_session_t *s);
+/* 下行（来自 framer 上抛）：完整 MCP 消息或控制帧 */
+int  bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind,
+                       const uint8_t *payload, uint16_t len);
+/* 上行（来自 L5）：完整 MCP 消息，受信用窗口约束，可能 E_AGAIN */
+int  bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len);
+void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms);
+/* port 在断链时调用：作废在途映射、token 处置按 bond 状态参数化 */
+void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact);
+
+/* ===== bt_mcp/mcp_server.h —— L5 ===== */
+/* JSON 解析为单遍 SAX 式（深度上限 6，键名白名单匹配，目标峰值 < 2KB RAM）。
+   写出为流式 writer 直写发送缓冲，不建 DOM。接口概要： */
+typedef struct {
+    const char *method;                      /* 指向只读静态区，不拷贝 */
+    /* 按需取参：找到才调用 getter，未出现的键不占内存 */
+    int (*get_str)(void *ctx, const char *key, const char **out, uint16_t *len);
+    int (*get_u32)(void *ctx, const char *key, uint32_t *out);
+    int (*get_raw)(void *ctx, const char *key, const char **out, uint32_t *len);
+} bt_mcp_request_t;
+
+/* 工具/资源注册表：编译期 const 数组，运行期零 RAM 注册表 */
+typedef int (*bt_mcp_tool_fn)(const bt_mcp_request_t *req,
+                              bt_mcp_writer_t *out,       /* 流式 JSON 写出 */
+                              bt_mcp_progress_t prog,     /* 可空：发进度通知 */
+                              void *user);
+
+typedef struct {
+    const char       *name;
+    const char       *desc;
+    const char       *input_schema_json;   /* 内嵌 JSON Schema 字符串 */
+    uint8_t           authz;                /* 0=open 1=consent 2=restricted */
+    bt_mcp_tool_fn    fn;
+    void             *user;
+} bt_mcp_tool_def_t;
+
+typedef struct {
+    const char *name;        /* 如 "hr_window" */
+    const char *desc;
+    uint8_t     authz;
+} bt_mcp_resource_def_t;
+
+extern const bt_mcp_tool_def_t     BT_MCP_TOOLS[];
+extern const uint16_t               BT_MCP_TOOLS_COUNT;
+extern const bt_mcp_resource_def_t BT_MCP_RESOURCES[];
+extern const uint16_t               BT_MCP_RESOURCES_COUNT;
+
+int  bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s,
+                        const char *fw_name, const char *fw_version);
+/* L4 上抛的完整 MCP 消息入口：解码→分派→写出响应（经 session_tx） */
+int  bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len);
+void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms);
+/* 设备主动事件（S→C notification：数据就绪/告警） */
+int  bt_mcp_server_notify(const char *method, const char *params_json);
+
+/* ===== bt_mcp/writer.h —— 流式 JSON 写出（L5 辅件） ===== */
+struct bt_mcp_writer {
+    int (*put)(void *sink, const char *data, uint32_t len);   /* 底层 sink=环形缓冲 */
+    void *sink;
+};
+int bt_mcp_w_begin_result (bt_mcp_writer_t*, int64_t req_id);
+int bt_mcp_w_str          (bt_mcp_writer_t*, const char *key, const char *val);
+int bt_mcp_w_u32          (bt_mcp_writer_t*, const char *key, uint32_t v);
+int bt_mcp_w_raw          (bt_mcp_writer_t*, const char *key, const char *raw_json);
+int bt_mcp_w_end_result   (bt_mcp_writer_t*);
+int bt_mcp_w_error        (bt_mcp_writer_t*, int64_t req_id,
+                           int code, const char *message);
+```
+
+### 7.1 驱动模型（裸机与 RTOS 同构）
+
+```c
+/* 裸机主循环 */
+for (;;) {
+    bt_mcp_framer_tick(&framer, now());
+    bt_mcp_session_tick(&sess, now());
+    bt_mcp_server_tick(&server, now());
+    platform_run_bt_stack();        /* 产生 on_rx/on_conn → core 内部状态推进 */
+    idle_sleep();
+}
+/* RTOS：单一协议任务把同样的三个 tick + 队列 drain 包成 while(1)。
+   core 本身不含任何队列/信号量原语 —— 并发归一由 port 层完成。 */
+```
+
+### 7.2 配置（编译期，全部集中在 bt_mcp/config.h，无 vendor ifdef）
+
+```c
+#define BT_MCP_CFG_MAX_REASM     4      /* 重组槽数 */
+#define BT_MCP_CFG_MAX_MSG       8192   /* 单消息字节上限 */
+#define BT_MCP_CFG_MAX_REQ_INFLIGHT 2   /* 同时处理 tools/call 数 */
+#define BT_MCP_CFG_FCS16         0      /* 通道无链路校验时置 1 */
+#define BT_MCP_CFG_FRAG_TOUT_MS  2000
+#define BT_MCP_CFG_HEAP          0      /* 0=纯静态；非 0 时允许 malloc（宿主机） */
+```
+
+## 8. Port 清单（协议核心之外的全部工作）
+
+| port | 平台无关度 | 实现要点 |
+|---|---|---|
+| GATT | 任意 BLE 栈（vendor host/Zephyr/bluedroid/NimBLE…）：定义一个 3 特征服务（Ctrl notify+write / Dn notify / Up write-no-rsp），ATT_MTU−3 填 cap.mtu；栈回调转投协议上下文 | 唯一必选 |
+| SPP | 任意 Classic 栈：SDP 注册 SPP、RFCOMM 通道，直接流通道 | 双模设备可选 |
+| L2CAP CoC | 支持 LE Credit Based 的栈：credit 回调映到 cap.flow_ctrl | 网关场景可选 |
+| host-mock | POSIX：socketpair 仿真包/流通道 | CI/golden/fuzz 必备 |
+
+SPP 与 GATT 之上协议核心**零代码差异**：唯一区别是 port 填的 `bt_mcp_chan_cap_t`。
+
+## 9. 兼容性矩阵
+
+| 兼容目标 | 本设计的支撑点 |
+|---|---|
+| 任意 MCU（8/16/32 位） | C99、无堆、无 OS 原语、整型定宽、定长结构体 |
+| 任意蓝牙栈 | 栈接触面收敛在 4 个 port（§8） |
+| 任意 Profile | 能力描述符自适应（分片/信用按 cap 收敛，流通道自动跳过） |
+| 任意 MCP Host | 线上 = 标准 JSON-RPC MCP（Bridge 转成 stdio/HTTP 对上） |
+| 存量 MCP 规范版本 | 锚定 2025-11-25 有状态语义；无状态版（2026-07-28）作为 v2 适配层，握手面已收敛在 mcp_server.c 单点 |
+
+## 10. 路线与验证
+
+- M1：frame.c + host-mock + Python 参照实现做 golden 字节差分 + libFuzzer 喂帧（含截断/乱序/重复/失步流）；出口 = 双向字节 100% 一致、fuzz 24h 零 crash。
+- M2：session+mcp_server 最小闭环（GATT port，任一可得平台）+ 手机 Bridge；出口 = initialize→tools/list→tools/call E2E。
+- M3：SPP port（与 GATT 同二进制各编一份对照测试，验证「零 core 差异」）；断链注入/窗口压满/authorization 流。
+- M4：CoC port、吞吐与功耗基线；开放给目标芯片各厂移植。
