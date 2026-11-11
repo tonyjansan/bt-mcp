@@ -65,6 +65,9 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
+echo "== 文档与代码一致性 =="
+python3 tools/check_docs.py
+
 echo "== 官方 MCP SDK 互验（V2） =="
 if [ -d tests/sdk_interop/node_modules/@modelcontextprotocol/sdk ]; then
     ( cd tests/sdk_interop && node sdk_interop.mjs ../../build/btmcp_mock )

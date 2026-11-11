@@ -84,8 +84,8 @@ a{color:var(--accent)}
 </style>
 
 <div class="wrap">
-<h1>BT-MCP v0.3 外部接口规约</h1>
-<p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-04</p>
+<h1>BT-MCP v0.5 外部接口规约</h1>
+<p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-11 · v0.5</p>
 
 <p>本文面向要把 <strong>bt-mcp core</strong> 接到真实 GATT / SPP 通道上的宿主（Proxy/Host）开发者。core 自身零厂商假设、零 OS 依赖、无动态分配；宿主的全部职责集中在三件事：<strong>① 填通道能力结构体，② 提供一对 emit/送达回调，③ 驱动时钟（tick）</strong>。其余协议细节（分片、信用、状态机、JSON-RPC）由 core 内部消化。</p>
 
@@ -208,13 +208,35 @@ a{color:var(--accent)}
 <p><code>bt_mcp_session_feed(sess, data, len, sink, user)</code> 是 port 的「收到数据」
 回调最简接入点：内部完成 framer 重组 → session 状态门 → L5 上抛。</p>
 
+<h3>v0.4 / v0.5 新增模块与能力</h3>
+<table>
+<tr><th>能力</th><th>API / 宏</th><th>说明</th></tr>
+<tr><td>工具元数据</td><td><code>bt_mcp_tool_def_t</code> 的 <code>title</code>/<code>annotations</code>/<code>output_schema_json</code></td><td>对应 MCP <code>annotations</code> 四个 hint（readOnly/destructive/idempotent/openWorld）</td></tr>
+<tr><td>富内容</td><td><code>bt_mcp_w_content_text/image/audio/resource</code></td><td><code>content[]</code> 可混排四种内容项</td></tr>
+<tr><td>prompts</td><td><code>bt_mcp_prompt_def_t</code> + <code>prompts/list</code>/<code>get</code></td><td>含 <code>arguments_schema_json</code></td></tr>
+<tr><td>资源订阅</td><td><code>resources/subscribe</code> + <code>bt_mcp_server_notify_resource_updated()</code></td><td>订阅表上限 <code>BT_MCP_CFG_MAX_SUBS</code>（默认 8）</td></tr>
+<tr><td>日志分级</td><td><code>logging/setLevel</code> + <code>bt_mcp_server_log()</code></td><td>低于阈值的日志被丢弃；<code>notifications/message</code> 的 level 取值见规范</td></tr>
+<tr><td>列表变化</td><td><code>bt_mcp_server_notify_list_changed()</code></td><td>tools/resources/prompts 三类</td></tr>
+<tr><td>授权实施</td><td><code>BT_MCP_AUTHZ_*</code> + <code>cfg.consent</code></td><td>拒绝统一 <code>-32003</code>（server error 区，本项目约定）</td></tr>
+<tr><td>双向请求</td><td><code>bt_mcp_server_request()</code></td><td>sampling/roots/elicitation 承载；在途槽 <code>MAX_S2C_REQ</code>，超时 <code>S2C_TOUT_MS</code></td></tr>
+<tr><td>MTU 热更新</td><td><code>bt_mcp_framer_set_mtu()</code></td><td>BLE MTU 交换后立即生效，0 = 回退</td></tr>
+<tr><td>NVM 持久化</td><td><code>bt_mcp_session_set_storage/save_state/load_state</code></td><td>快照含 magic+version 校验</td></tr>
+<tr><td>keepalive</td><td><code>BT_MCP_CFG_KEEPALIVE_MS</code>/<code>IDLE_DEAD_MS</code></td><td><b>默认 0 = 关闭</b>，行为不变</td></tr>
+<tr><td>多会话</td><td><code>bt_mcp_server_pool_t</code></td><td>按 session 分派到各自的 <code>bt_mcp_server_t</code>（实例本身就是每会话上下文）</td></tr>
+<tr><td>共享重组缓冲</td><td><code>BT_MCP_CFG_SHARED_REASM=1</code></td><td>framer 41072B → 16448B（FULL 档）；代价是只允许一条分片消息在途</td></tr>
+<tr><td>JSON-RPC batch</td><td>按协商版本自动分支</td><td>2025-03-26 及更早聚合数组；2025-06-18+ 回 <code>-32600</code></td></tr>
+<tr><td><code>_meta</code> 透传</td><td><code>bt_mcp_call_set_meta()</code></td><td>结果级输出（content 闭合之后）；内容写入器上不可用</td></tr>
+</table>
+<p><b>健壮性契约</b>：所有 writer 入口校验 <code>w/put/sink</code>、所有 JSON getter
+校验输出指针——传 NULL 一律返回 <code>E_ARGS</code>，绝不崩溃（v0.5 之前会段错误）。</p>
+
 <h2 id="ctrl"><span class="no">4</span>控制帧</h2>
 
 <p>控制帧（<code>flags bit2=1</code>）恒单片 ≤ 255B，payload 首字节为类型：</p>
 
 <table>
 <tr><th>type</th><th>宏</th><th>参数（payload 后续）</th><th>方向</th><th>用途</th></tr>
-<tr><td>0x01</td><td><code>BT_MCP_CTRL_CREDIT</code></td><td>u16 credits（增量回补，u8 截断 <code>&amp;0xFF</code>）</td><td>双向</td><td>包通道信用回补</td></tr>
+<tr><td>0x01</td><td><code>BT_MCP_CTRL_CREDIT</code></td><td>u16 <b>累计</b>已消费条数（小端，回绕安全）</td><td>双向</td><td>包通道信用回补</td></tr>
 <tr><td>0x02</td><td><code>BT_MCP_CTRL_PING</code></td><td>u8 epoch</td><td>双向</td><td>活性探测</td></tr>
 <tr><td>0x03</td><td><code>BT_MCP_CTRL_RESUME_REQ</code></td><td>u32 token</td><td>C→S</td><td>会话恢复请求</td></tr>
 <tr><td>0x04</td><td><code>BT_MCP_CTRL_RESUME_OK</code></td><td>u32 token</td><td>S→C</td><td>恢复确认</td></tr>
@@ -230,8 +252,21 @@ a{color:var(--accent)}
 </table>
 <p>可靠性语义：发送侧为每条 ≤<code>BT_MCP_CFG_TX_RETRY_BYTES</code> 的消息登记重传槽，
 <code>ack_tout_ms</code> 未确认则按原 seq 整条重发（最多 <code>retry_max</code> 次）；
-接收侧按 <code>seq+len+CRC32</code> 指纹去重（默认 2 条 / 5s 窗口），重复消息只回 ACK
-不再上抛。超出槽容量的消息不享重传保护（应用层或 resources 分页兜底）。</p>
+接收侧按 <code>seq+len+CRC32</code> 指纹去重（默认 5s 窗口），重复消息只回 ACK
+不再上抛。</p>
+<p><span class="badge">v0.5</span> 两条重要扩充：</p>
+<ul>
+<li><b>大消息保护</b>：普通 <code>bt_mcp_session_tx()</code> 只保护
+≤<code>BT_MCP_CFG_TX_RETRY_BYTES</code>（默认 512B）的消息。
+<code>bt_mcp_session_tx_ref()</code> 改为<b>引用式</b>——槽里只记
+<code>(seq, len, 指针)</code>，重传时从调用方缓冲重新编码，因此可覆盖到
+<code>MAX_MSG</code>。<b>契约</b>：该缓冲必须在 ACK 或放弃之前保持有效。</li>
+<li><b>拥塞退避</b>：ACK 超时不再是固定值。超时重传时
+<code>rto = min(rto×2, BT_MCP_CFG_RTO_MAX_MS)</code>（默认上限 4800ms）；
+收到<b>任何合法 ACK</b> 立即回落到基准 <code>ack_tout_ms</code>；
+NACK 定点补片<b>不</b>退避（对端明确告知缺哪片，不是拥塞信号）。
+默认态 <code>rto == 基准</code>，无丢包时行为与 v0.4 逐字节一致。</li>
+</ul>
 <p><span class="badge">v0.3</span> 信用改为闭环：每消费对端一条 MCP 消息自动回补
 1 credit（饱和 255），宿主无需手工发 CREDIT。</p>
 
@@ -519,11 +554,11 @@ BT_MCP_E_IO     = -8   <span class="c">/* 底层 sink/transport 写失败 */</sp
 <li><strong>背压</strong>：处理 <code>E_AGAIN</code>（信用耗尽，缓存重发）与 port 的 <code>E_NOMEM</code>+drop（线路缓冲满，需加大 drain 频率）。</li>
 <li><strong>时钟</strong>：周期 <code>session_tick(now_ms)</code>；否则半帧超时/RESUME 超时永不触发。</li>
 <li><strong>工具表</strong>：const 编译期表 + input_schema_json 字符串 + authz 级别（OPEN/CONSENT/RESTRICTED，授权 UI 由宿主实现）。</li>
-<li><strong>验收基线</strong>：参考仓库全量回归 = 1335 项差分 + 184 项 port HIL + fuzz 10 亿轮零崩溃。最小 E2E 验收 = <code>initialize → notifications/initialized → tools/list → tools/call → ping</code> 全链路（含 mtu=23 分片链路）。</li>
+<li><strong>验收基线</strong>：参考仓库全量回归 = 1295 项差分（主 1045 + FCS16 配对 196 + 共享模式 54）+ 198 项 port HIL + 626 项单元 + 38 项官方 SDK 互验 + 20 项 golden，全绿；fuzz 帧层 200 万轮零崩溃。最小 E2E 验收 = <code>initialize → notifications/initialized → tools/list → tools/call → ping</code> 全链路（含 mtu=23 分片链路）。</li>
 </ol>
 
 <hr style="margin-top:48px;border:none;border-top:1px solid var(--border)">
-<p class="meta">BT-MCP v0.3 草案全文见 <code>docs/bt-mcp-core-draft.md</code>；源码 <code>core/</code> + <code>port/</code>。
-当前发布：1339 项协议差分检查 + 198 项 port HIL + 169 项单元检查全绿，
-另有 ASan/UBSan 差分与独立 fuzz 引擎（2026-11-10）。</p>
+<p class="meta">BT-MCP v0.5 草案全文见 <code>docs/bt-mcp-core-draft.md</code>；源码 <code>core/</code> + <code>port/</code>。
+当前发布：1295 项协议差分 + 198 项 port HIL + 626 项单元 + 38 项官方 MCP SDK 互验
++ 20 项 golden，全绿；行覆盖 94.7% / 分支 67.1%；ASan/UBSan 与 TSan 干净（2026-11-11）。</p>
 </div>

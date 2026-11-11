@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""check_docs.py —— 文档与代码一致性（防漂移）。
+
+检查三件事：
+  1. 文档里提到的 bt_mcp_*/BT_MCP_* 符号必须真实存在于头文件（core + port）；
+  2. 关键数字（回归基线、覆盖率）在 README / draft / validation 之间一致；
+  3. 版本标记：README/draft/interface-spec 的版本号一致。
+
+用法：python3 tools/check_docs.py        # 0 = 一致
+"""
+import glob
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+
+# 允许的「非符号」：环境变量、构建宏、历史记录里被移除的类型、计划中的提案
+ALLOW = {
+    'BT_MCP_MOCK', 'BT_MCP_TSAN', 'BT_MCP_FCS16', 'BT_MCP_MAX_REASM',
+    'BT_MCP_AUTHZ_', 'BT_MCP_EC_', 'BT_MCP_E', 'BT_MCP_CFG_HEAP',
+    'BT_MCP_ASSERT_REENTRANT', 'BT_MCP_CFG_ASSERT_INVARIANTS',
+    'BT_MCP_ENTER', 'BT_MCP_LEAVE',
+    'bt_mcp_server_add_session', 'bt_mcp_session_handle_t',
+    'bt_mcp_progress_t',            # v0.2 已移除，CHANGELOG 历史记录里提到
+    'bt_mcp_session_ctrl',          # 存在，但可能被写作 session_ctrl 简写
+}
+
+DOCS = ['README.md', 'docs/bt-mcp-core-draft.md', 'docs/bt-mcp-interface-spec.html',
+        'docs/v0.5-validation.md', 'docs/v0.4-validation.md',
+        'docs/release-notes-v0.4.md', 'docs/release-notes-v0.3.md',
+        'docs/roadmap-v0.5.md', 'docs/roadmap-v0.6.md', 'CHANGELOG.md']
+
+fails = []
+
+
+def headers_symbols():
+    syms = set()
+    for f in glob.glob('core/include/bt_mcp/*.h') + glob.glob('port/bt_mcp/*.h'):
+        t = open(f, encoding='utf-8').read()
+        for m in re.finditer(r'\b(bt_mcp_[a-z0-9_]+|BT_MCP_[A-Z0-9_]+)\b', t):
+            syms.add(m.group(1))
+    return syms
+
+
+def check_symbols():
+    syms = headers_symbols()
+    for d in DOCS:
+        if not os.path.exists(d):
+            continue
+        t = open(d, encoding='utf-8').read()
+        for m in re.finditer(r'\b(bt_mcp_[a-z0-9_]+|BT_MCP_[A-Z0-9_]+)\b', t):
+            sym = m.group(1)
+            if sym in ALLOW or sym in syms:
+                continue
+            fails.append(f"{d}: 提到不存在的符号 {sym}")
+
+
+def check_numbers():
+    """回归基线数字必须在 README / draft / validation 三处一致。"""
+    targets = {
+        'README.md': [r'1295', r'198', r'626', r'38', r'20'],
+        'docs/bt-mcp-core-draft.md': [r'1295', r'198', r'626', r'38', r'20'],
+        'docs/v0.5-validation.md': [r'1295', r'198', r'626', r'38', r'20'],
+    }
+    for path, pats in targets.items():
+        if not os.path.exists(path):
+            continue
+        t = open(path, encoding='utf-8').read()
+        for p in pats:
+            if not re.search(r'\b' + p + r'\b', t):
+                fails.append(f"{path}: 缺少基线数字 {p}")
+
+
+def check_versions():
+    """三份主文档的版本号必须一致。"""
+    want = 'v0.5'
+    checks = {
+        'README.md': r'## Status \(2026-\d\d-\d\d, (v\d\.\d)\)',
+        'docs/bt-mcp-core-draft.md': r'# BT-MCP 核心协议草案 (v\d\.\d)',
+        'docs/bt-mcp-interface-spec.html': r'<h1>BT-MCP (v\d\.\d) 外部接口规约</h1>',
+    }
+    for path, pat in checks.items():
+        if not os.path.exists(path):
+            continue
+        t = open(path, encoding='utf-8').read()
+        m = re.search(pat, t)
+        if not m:
+            fails.append(f"{path}: 找不到版本标记（模式 {pat}）")
+        elif m.group(1) != want:
+            fails.append(f"{path}: 版本 {m.group(1)} != {want}")
+
+
+def main():
+    check_symbols()
+    check_numbers()
+    check_versions()
+    if fails:
+        print("文档与代码不一致：")
+        for f in fails:
+            print("  -", f)
+        return 1
+    print("DOCS OK: 符号 / 基线数字 / 版本标记 三处一致")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
