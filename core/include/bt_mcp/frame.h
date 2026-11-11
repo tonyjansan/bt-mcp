@@ -62,6 +62,7 @@ struct bt_mcp_reasm_slot {
 
 struct bt_mcp_framer {
     const bt_mcp_chan_cap_t *cap;
+    uint16_t                 mtu_override;  /* 0=用 cap->mtu；链路 MTU 热更新用 */
     bt_mcp_frame_cfg_t       cfg;
     uint8_t                  tx_seq;      /* 发送序号 mod 256 */
     uint32_t                 now_ms;      /* 最近一次 tick 的时间戳缓存 */
@@ -109,6 +110,10 @@ int  bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
 int  bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq, uint8_t *idx);
 void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms);
 /* 丢弃在途重组状态（断链时调用，防跨连接的半帧串味） */
+/* 链路 MTU 变化（BLE 连接后 MTU 交换、CoC 重配）：立即生效于后续分片。
+ * mtu=0 表示回退到 cap->mtu；已发出的帧不受影响（接收侧按其头部 len 解析）。 */
+int  bt_mcp_framer_set_mtu(bt_mcp_framer_t *f, uint16_t mtu);
+
 void bt_mcp_framer_reset(bt_mcp_framer_t *f);
 
 #endif

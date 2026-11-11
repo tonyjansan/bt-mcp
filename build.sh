@@ -40,6 +40,12 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    core/src/trace.c -o build/test_reliability
 ./build/test_reliability
 
+echo "== 有损通道收敛（丢片/重复/乱序） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_lossy.c core/src/frame.c core/src/session.c core/src/trace.c \
+   -o build/test_lossy
+./build/test_lossy
+
 echo "== FCS16 往返（通道无链路校验时才开） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    tests/test_fcs16.c core/src/frame.c core/src/trace.c -o build/test_fcs16

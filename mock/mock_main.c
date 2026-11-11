@@ -210,8 +210,10 @@ static int prompt_greet(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *us
     if (!rc) rc = bt_mcp_w_str_lit(w, "A friendly greeting");
     w->need_comma = 1;
     if (!rc) rc = bt_mcp_w_key(w, "messages");
-    if (!rc) rc = bt_mcp_w_raw(w, "[{\"role\":\"user\",\"content\":"
-                                  "{\"type\":\"text\",\"text\":\"hello\"}}]", 63);
+    static const char MSGS[] =
+        "[{\"role\":\"user\",\"content\":"
+        "{\"type\":\"text\",\"text\":\"hello\"}}]";
+    if (!rc) rc = bt_mcp_w_raw(w, MSGS, (uint32_t)(sizeof MSGS - 1));
     w->need_comma = 1;
     return rc;
 }

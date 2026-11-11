@@ -113,6 +113,8 @@ static void clear_reliability(bt_mcp_session_t *s)
 void bt_mcp_session_link_up(bt_mcp_session_t *s, uint32_t resume_token)
 {
     bt_mcp_trace(BT_MCP_TRACE_INFO, "session:link_up", &resume_token, 4);
+    s->bond = resume_token ? 1 : 0;
+    s->last_rx_ms = s->now_ms;
     s->state = BT_MCP_S_LINK_UP;
     s->credits = s->cfg.tx_window;
     s->resume_pending = 0;
@@ -342,6 +344,7 @@ int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
         }
     }
 
+    s->last_rx_ms = s->now_ms;
     if (mcp_sink) mcp_sink(user, payload, len);
     /* 判例 3/5：消费即回补信用、消费即 ACK。LINK_UP 期同样要做——
      * 握手消息（initialize 响应/initialized）也占对端窗口，漏补会永久少一格。 */
@@ -468,6 +471,45 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
         bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:retransmit", &sl->seq, 1);
     }
     return rc;
+}
+
+#define BT_MCP_STATE_MAGIC 0x31544D42u   /* 'BTM1' */
+
+void bt_mcp_session_set_storage(bt_mcp_session_t *s, const bt_mcp_storage_t *st)
+{
+    if (!s) return;
+    if (st) s->storage = *st;
+    else memset(&s->storage, 0, sizeof s->storage);
+}
+
+int bt_mcp_session_save_state(const bt_mcp_session_t *s)
+{
+    if (!s || !s->storage.save) return BT_MCP_OK;   /* 无钩子：静默成功 */
+    bt_mcp_session_state_t st;
+    memset(&st, 0, sizeof st);
+    st.magic = BT_MCP_STATE_MAGIC;
+    st.version = 1;
+    st.flags = s->bond ? 1 : 0;
+    st.resume_token = s->resume_token;
+    return s->storage.save(s->storage.user, &st, (uint16_t)sizeof st);
+}
+
+int bt_mcp_session_load_state(bt_mcp_session_t *s)
+{
+    if (!s || !s->storage.load) return BT_MCP_E_ARGS;
+    bt_mcp_session_state_t st;
+    memset(&st, 0, sizeof st);
+    int rc = s->storage.load(s->storage.user, &st, (uint16_t)sizeof st);
+    if (rc) return rc;
+    if (st.magic != BT_MCP_STATE_MAGIC || st.version != 1) return BT_MCP_E_PARSE;
+    s->resume_token = st.resume_token;
+    s->bond = (uint8_t)(st.flags & 1);
+    return BT_MCP_OK;
+}
+
+uint32_t bt_mcp_session_resume_token(const bt_mcp_session_t *s)
+{
+    return s ? s->resume_token : 0;
 }
 
 void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms)

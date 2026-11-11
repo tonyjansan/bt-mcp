@@ -65,6 +65,21 @@ struct bt_mcp_rx_fp {
     uint32_t msg_no;      /* 注册时的消息计次：只对「最近几条」做去重判定 */
 };
 
+/* NVM 持久化钩子（v0.4 E2）：应用提供 save/load，core 只在状态变化时调用。 */
+typedef struct {
+    int (*save)(void *user, const void *buf, uint16_t len);
+    int (*load)(void *user, void *buf, uint16_t len);
+    void *user;
+} bt_mcp_storage_t;
+
+/* 持久化快照（结构体布局即线上格式，版本字段用于向后兼容） */
+typedef struct {
+    uint32_t magic;        /* 'BTM1' */
+    uint16_t version;      /* 1 */
+    uint16_t flags;        /* bit0=已绑定 */
+    uint32_t resume_token;
+} bt_mcp_session_state_t;
+
 struct bt_mcp_session {
     bt_mcp_session_cfg_t cfg;
     bt_mcp_framer_t     *fr;         /* 绑定的 L3 */
@@ -78,6 +93,9 @@ struct bt_mcp_session {
     uint8_t        credits;
     /* RESUME */
     uint32_t       resume_token;  /* 本端持有的会话恢复令牌（绑 bond） */
+    bt_mcp_storage_t storage;     /* 可空：NVM 持久化钩子 */
+    uint8_t          bond;        /* 当前链路是否已绑定 */
+    uint32_t         last_rx_ms;  /* 最近一次收到有效 MCP 消息的时间 */
     uint8_t        resume_pending;
     uint32_t       resume_t0;
     /* RESUME 防爆破 */
@@ -153,5 +171,13 @@ int  bt_mcp_session_ping(bt_mcp_session_t *s, uint8_t epoch);
 uint32_t bt_mcp_session_rtt(const bt_mcp_session_t *s, int *valid);
 
 void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms);
+
+/* ---- 持久化（v0.4 E2）---- */
+void bt_mcp_session_set_storage(bt_mcp_session_t *s, const bt_mcp_storage_t *st);
+/* 把 resume token / 绑定标志写入 storage；未设 storage 时是空操作（返回 0） */
+int  bt_mcp_session_save_state(const bt_mcp_session_t *s);
+/* 上电恢复：校验 magic/version 后回填；失败不影响会话可用性 */
+int  bt_mcp_session_load_state(bt_mcp_session_t *s);
+uint32_t bt_mcp_session_resume_token(const bt_mcp_session_t *s);
 
 #endif

@@ -120,6 +120,12 @@
 #ifndef BT_MCP_CFG_S2C_TOUT_MS
 #define BT_MCP_CFG_S2C_TOUT_MS   30000  /* S→C 请求超时 */
 #endif
+#ifndef BT_MCP_CFG_KEEPALIVE_MS
+#define BT_MCP_CFG_KEEPALIVE_MS  0      /* >0 时空闲该毫秒数后自动 PING（0=关闭） */
+#endif
+#ifndef BT_MCP_CFG_IDLE_DEAD_MS
+#define BT_MCP_CFG_IDLE_DEAD_MS  0      /* >0 时超过该毫秒无入站即判链路失效（0=关闭） */
+#endif
 #ifndef BT_MCP_CFG_TRACE
 #define BT_MCP_CFG_TRACE         0      /* 1 = 编译进追踪钩子（debug 构建用） */
 #endif

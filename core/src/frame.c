@@ -17,12 +17,13 @@
 
 #define BT_MCP_GAP_WAIT_MAX 4   /* 同一槽位最多容忍 4 次缺片，超限弃槽 */
 
-static uint16_t chunk_cap(const bt_mcp_chan_cap_t *cap)
+static uint16_t chunk_cap(const bt_mcp_chan_cap_t *cap, uint16_t mtu_ovr)
 {
     /* 单片载荷上限：包通道 = min(mtu,261)-6（≤255）；流通道 = 整消息单帧直发，
-     * 上限即 MAX_MSG（u16 len 可承载）。返回 0 = 通道不可用。 */
+     * 上限即 MAX_MSG（u16 len 可承载）。返回 0 = 通道不可用。
+     * mtu_ovr != 0 表示链路 MTU 热更新值（v0.4 C4）。 */
     if (cap->kind == BT_MCP_CHAN_STREAM) return BT_MCP_CFG_MAX_MSG;
-    uint16_t m = cap->mtu;
+    uint16_t m = mtu_ovr ? mtu_ovr : cap->mtu;
     if (m > 261) m = 261;
     if (m <= BT_MCP_HDR_LEN) return 0;
     m -= BT_MCP_HDR_LEN;
@@ -37,7 +38,7 @@ int bt_mcp_framer_init(bt_mcp_framer_t *f, const bt_mcp_frame_cfg_t *cfg,
                        const bt_mcp_chan_cap_t *cap)
 {
     if (!f || !cap) return BT_MCP_E_ARGS;
-    if (chunk_cap(cap) == 0) return BT_MCP_E_ARGS;
+    if (chunk_cap(cap, 0) == 0) return BT_MCP_E_ARGS;
     memset(f, 0, sizeof(*f));
     f->cap = cap;
     f->cfg = cfg ? *cfg
@@ -46,6 +47,15 @@ int bt_mcp_framer_init(bt_mcp_framer_t *f, const bt_mcp_frame_cfg_t *cfg,
     if (f->cfg.max_reasm == 0 || f->cfg.max_reasm > BT_MCP_CFG_MAX_REASM)
         f->cfg.max_reasm = BT_MCP_CFG_MAX_REASM;
     if (f->cfg.frag_tout_ms == 0) f->cfg.frag_tout_ms = BT_MCP_CFG_FRAG_TOUT_MS;
+    return BT_MCP_OK;
+}
+
+int bt_mcp_framer_set_mtu(bt_mcp_framer_t *f, uint16_t mtu)
+{
+    if (!f || !f->cap) return BT_MCP_E_ARGS;
+    if (f->cap->kind == BT_MCP_CHAN_STREAM) return BT_MCP_E_ARGS;  /* 流通道无 MTU 概念 */
+    if (mtu && mtu <= BT_MCP_HDR_LEN) return BT_MCP_E_ARGS;
+    f->mtu_override = mtu;      /* 0 = 回退 cap->mtu */
     return BT_MCP_OK;
 }
 
@@ -120,7 +130,7 @@ static int plan_frags(bt_mcp_framer_t *f, uint8_t kind, uint32_t len,
                       uint16_t *chunk_out, uint16_t *nfrag_out)
 {
     if (len > BT_MCP_CFG_MAX_MSG) return BT_MCP_E_TOOBIG;
-    uint16_t chunk = chunk_cap(f->cap);
+    uint16_t chunk = chunk_cap(f->cap, f->mtu_override);
     if (chunk == 0) return BT_MCP_E_STATE;
     if (kind == BT_MCP_KIND_CTRL && len > BT_MCP_CTRL_MAX_PAYLOAD)
         return BT_MCP_E_TOOBIG;

@@ -16,6 +16,18 @@
 #include "bt_mcp/err.h"
 
 static int g_pass, g_fail;
+
+/* NVM 测试用存储（文件作用域：C99 不允许嵌套函数） */
+static bt_mcp_session_state_t g_nvm;
+static int g_nvm_have;
+static int nvm_save(void *u, const void *buf, uint16_t n)
+{
+    (void)u; memcpy(&g_nvm, buf, n); g_nvm_have = 1; return 0;
+}
+static int nvm_load(void *u, void *buf, uint16_t n)
+{
+    (void)u; if (!g_nvm_have) return -1; memcpy(buf, &g_nvm, n); return 0;
+}
 #define CHECK(c, m) do { if (c) g_pass++; else { g_fail++; \
     printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, m); } } while (0)
 
@@ -247,6 +259,46 @@ int main(void)
         int rc = bt_mcp_session_tx(&se_tx, (const uint8_t *)"x", 1);
         CHECK(rc != 0, "send fails when emit backpressures");
         CHECK(se_tx.credits == base, "no credit lost on send failure");
+    }
+
+    /* ---- 12. MTU 热更新（C4）：改 MTU 后分片数随之变化 ---- */
+    {
+        setup(244);
+        q.n = 0;
+        static char m3[500]; memset(m3, 'm', sizeof m3);
+        CHECK(bt_mcp_framer_send(&fr_tx, BT_MCP_KIND_MCP, (const uint8_t *)m3,
+                                 sizeof m3, q_emit, &q) == 0, "send @mtu244");
+        int n244 = q.n;
+        q.n = 0;
+        CHECK(bt_mcp_framer_set_mtu(&fr_tx, 61) == 0, "set_mtu 61");
+        CHECK(bt_mcp_framer_send(&fr_tx, BT_MCP_KIND_MCP, (const uint8_t *)m3,
+                                 sizeof m3, q_emit, &q) == 0, "send @mtu61");
+        CHECK(q.n > n244, "smaller mtu -> more fragments");
+        q.n = 0;
+        CHECK(bt_mcp_framer_set_mtu(&fr_tx, 0) == 0, "set_mtu 0 = restore");
+        CHECK(bt_mcp_framer_send(&fr_tx, BT_MCP_KIND_MCP, (const uint8_t *)m3,
+                                 sizeof m3, q_emit, &q) == 0, "send @restored");
+        CHECK(q.n == n244, "restored mtu gives original fragment count");
+        CHECK(bt_mcp_framer_set_mtu(&fr_tx, 3) != 0, "reject mtu <= hdr");
+    }
+
+    /* ---- 13. NVM 持久化钩子（E2）：save → load 往返 ---- */
+    {
+        setup(244);
+        bt_mcp_storage_t st = { nvm_save, nvm_load, NULL };
+        bt_mcp_session_set_storage(&se_tx, &st);
+        bt_mcp_session_link_up(&se_tx, 0xA1B2C3D4u);
+        CHECK(bt_mcp_session_save_state(&se_tx) == 0, "save_state ok");
+        CHECK(g_nvm.resume_token == 0xA1B2C3D4u, "token persisted");
+        se_tx.resume_token = 0;
+        se_tx.bond = 0;
+        CHECK(bt_mcp_session_load_state(&se_tx) == 0, "load_state ok");
+        CHECK(se_tx.resume_token == 0xA1B2C3D4u, "token restored");
+        CHECK(se_tx.bond == 1, "bond flag restored");
+        CHECK(bt_mcp_session_resume_token(&se_tx) == 0xA1B2C3D4u, "token getter");
+        /* 无 storage 时 save 是空操作而不是错误 */
+        bt_mcp_session_set_storage(&se_rx, NULL);
+        CHECK(bt_mcp_session_save_state(&se_rx) == 0, "save without storage is no-op");
     }
 
     printf("\n%d pass, %d fail\n", g_pass, g_fail);

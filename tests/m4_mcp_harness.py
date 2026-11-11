@@ -121,6 +121,40 @@ def s_error_paths(rng):
 
 
 @scenario
+def s_v04_meta(rng):
+    """v0.4：工具元数据 / prompts / 订阅 / 日志分级。"""
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+        b'{"jsonrpc":"2.0","id":3,"method":"prompts/list"}',
+        b'{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"greet"}}',
+        b'{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{"name":"nope"}}',
+        b'{"jsonrpc":"2.0","id":6,"method":"resources/list"}',
+        b'{"jsonrpc":"2.0","id":7,"method":"resources/subscribe","params":{"uri":"bt-mcp://dev/log"}}',
+        b'{"jsonrpc":"2.0","id":8,"method":"resources/subscribe","params":{"uri":"bt-mcp://dev/hr_window"}}',
+        b'{"jsonrpc":"2.0","id":9,"method":"resources/unsubscribe","params":{"uri":"bt-mcp://dev/log"}}',
+        b'{"jsonrpc":"2.0","id":10,"method":"resources/subscribe","params":{"uri":"bogus"}}',
+        b'{"jsonrpc":"2.0","id":11,"method":"logging/setLevel","params":{"level":"debug"}}',
+        b'{"jsonrpc":"2.0","id":12,"method":"logging/setLevel","params":{"level":"nope"}}',
+        b'{"jsonrpc":"2.0","id":13,"method":"logging/setLevel","params":{}}',
+    ]
+    return script(0, 0, [(b"echo", b"e")], msgs)
+
+
+@scenario
+def s_v04_authz(rng):
+    """v0.4：授权（consent 放行/拒绝、restricted）与富内容。"""
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"restricted_tool"}}',
+        b'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"consent_tool","arguments":{}}}',
+        b'{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"consent_tool","arguments":{"allow":true}}}',
+        b'{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"rich_tool"}}',
+        b'{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"consent_tool"}}',
+        b'{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"missing"}}',
+    ]
+    return script(0, 0, [(b"echo", b"e")], msgs)
+
+
+@scenario
 def s_id_edge(rng):
     msgs = init_seq() + [
         b'{"jsonrpc":"2.0","id":9223372036854775807,"method":"tools/list"}',

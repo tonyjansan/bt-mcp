@@ -1548,6 +1548,20 @@ impl Cs {
             }
         }
     }
+    fn escape_inline(&mut self, d: &[u8]) {
+        for &ch in d {
+            match ch {
+                b'"' => self.b.extend_from_slice(b"\\\""),
+                b'\\' => self.b.extend_from_slice(b"\\\\"),
+                b'\n' => self.b.extend_from_slice(b"\\n"),
+                b'\r' => self.b.extend_from_slice(b"\\r"),
+                b'\t' => self.b.extend_from_slice(b"\\t"),
+                _ if ch < 0x20 => self.b.extend_from_slice(
+                    format!("\\u00{:02x}", ch).as_bytes()),
+                _ => self.b.push(ch),
+            }
+        }
+    }
     fn item_prefix(&mut self) {
         self.close_text();
         if self.items != 0 { self.b.push(b','); }
@@ -1577,7 +1591,7 @@ impl Cs {
         self.b.extend_from_slice(b"\",\"mimeType\":\"");
         self.b.extend_from_slice(mime.as_bytes());
         self.b.extend_from_slice(b"\",\"text\":\"");
-        self.put(text);
+        self.escape_inline(text);
         self.b.extend_from_slice(b"\"}}}");
         self.items = self.items.wrapping_add(1);
     }
