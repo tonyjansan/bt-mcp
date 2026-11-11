@@ -14,7 +14,7 @@ const HDR: usize = 6;
 const FLAG_LAST: u8 = 0x01;
 const FLAG_CHUNK: u8 = 0x02;
 const FLAG_CTRL: u8 = 0x04;
-const MAX_FRAG: usize = 32;
+const MAX_FRAG: usize = 34;   /* 与 C 的 BT_MCP_CFG_MAX_FRAG 一致（8KB/255B=33→34） */
 const MAX_MSG: usize = 8192;
 
 const E_AGAIN: i32 = -1;

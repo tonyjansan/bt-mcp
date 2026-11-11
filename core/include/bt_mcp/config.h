@@ -19,7 +19,9 @@
 #define BT_MCP_CFG_FRAG_TOUT_MS  2000   /* 半帧滞留回收时限 */
 #endif
 #ifndef BT_MCP_CFG_MAX_FRAG
-#define BT_MCP_CFG_MAX_FRAG      32     /* 单消息分片上限（8KB/244B≈34→32 片封顶需分页） */
+/* 单消息分片上限：须能装下 MAX_MSG（8KB/255B=33 → 取 34）。
+ * v0.2 的 32 会让 8161..8192B 的消息在 MTU 261 时假性 E_TOOBIG（v0.3 修正）。 */
+#define BT_MCP_CFG_MAX_FRAG      34
 #endif
 
 /* ---- 发送面：不可靠包通道的消息级重传 ---- */
@@ -71,6 +73,28 @@
 #endif
 #ifndef BT_MCP_CFG_FCS16
 #define BT_MCP_CFG_FCS16         0      /* 通道无链路校验时置 1（追加 CRC16-CCITT） */
+#endif
+
+/* ---- 配置合法性编译期断言（配错直接编不过，而不是运行期出错） ---- */
+/* MAX_MSG 用 u16 承载片长与重组计数，必须 ≤ 65535 */
+#if BT_MCP_CFG_MAX_MSG > 65535
+#  error "BT_MCP_CFG_MAX_MSG must be <= 65535 (u16 framing/len_total)"
+#endif
+#if BT_MCP_CFG_MAX_MSG < 64
+#  error "BT_MCP_CFG_MAX_MSG too small to carry a minimal MCP message"
+#endif
+#if BT_MCP_CFG_MAX_REASM < 1 || BT_MCP_CFG_MAX_REASM > 8
+#  error "BT_MCP_CFG_MAX_REASM must be 1..8 (max_pending is a 4-bit field)"
+#endif
+#if BT_MCP_CFG_TX_SLOTS < 1 || BT_MCP_CFG_TX_SLOTS > 8
+#  error "BT_MCP_CFG_TX_SLOTS must be 1..8"
+#endif
+#if BT_MCP_CFG_TX_RETRY_BYTES < 32
+#  error "BT_MCP_CFG_TX_RETRY_BYTES must be >= 32 (or set retry_max=0 to disable)"
+#endif
+/* 单片载荷 ≤255（u8 idx 分片数 × 255 需覆盖 MAX_MSG） */
+#if BT_MCP_CFG_MAX_FRAG * 255 < BT_MCP_CFG_MAX_MSG
+#  error "BT_MCP_CFG_MAX_FRAG too small for BT_MCP_CFG_MAX_MSG at 255B chunks"
 #endif
 
 /* 协商协议版本（initialize 回显与支持集判定见 mcp_server.c） */

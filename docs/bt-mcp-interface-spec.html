@@ -198,6 +198,16 @@ a{color:var(--accent)}
 <strong>v0.3 起：一个分片 = 一次 <code>emit</code> 调用</strong>（帧头与载荷已在 core 内拼好）。宿主直接把 <code>emit</code> 落到 GATT notify / SPP write 即可，无需再做片聚合——v0.2 的「hdr 一次、payload 一次」陷阱已消除。唯一例外是流通道上超过内部栈缓冲（约 261B）的大帧，会拆成「头+载荷」两次 emit，字节流语义下等价。
 </div>
 
+<h3>v0.3 新增模块</h3>
+<table>
+<tr><th>模块</th><th>职责</th><th>典型调用者</th></tr>
+<tr><td><code>mcp_client.h/.c</code></td><td>Bridge 侧 L5：主动 initialize、请求排队与 id 匹配、超时上抛、通知回调</td><td>手机/网关 Bridge</td></tr>
+<tr><td><code>tier.h</code></td><td>内存档位（COMPACT/STANDARD/FULL），一处宏选容量</td><td>移植时定档</td></tr>
+<tr><td><code>coc_port.h</code></td><td>L2CAP CoC 通道适配（PACKET + reliable + 自带流控）</td><td>网关/高吞吐</td></tr>
+</table>
+<p><code>bt_mcp_session_feed(sess, data, len, sink, user)</code> 是 port 的「收到数据」
+回调最简接入点：内部完成 framer 重组 → session 状态门 → L5 上抛。</p>
+
 <h2 id="ctrl"><span class="no">4</span>控制帧</h2>
 
 <p>控制帧（<code>flags bit2=1</code>）恒单片 ≤ 255B，payload 首字节为类型：</p>

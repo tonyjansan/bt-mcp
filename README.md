@@ -39,15 +39,33 @@ v0.3 相对 v0.2 的实质修复：
 ## Layout
 
 ```
-core/include/bt_mcp/  public headers (tier, config, capability, err, frame, session, json, writer, mcp_server)
+core/include/bt_mcp/  public headers (tier, config, capability, err, frame, session,
+                      json, writer, mcp_server, mcp_client)
 core/src/             protocol core (C99, no OS deps, no malloc)
 port/bt_mcp/          channel adapters: gatt_port.h, spp_port.h, coc_port.h (header-only)
 mock/                 C mock binary speaking the differential-harness instruction protocol
 oracle/               independent Rust oracle for differential testing
-tests/                diff harnesses (M1/M3/M4a/M4b) + HIL + unit tests
+tests/                diff harnesses (M1/M3/M4a/M4b) + HIL + unit + reliability + client tests
+tools/                bench.c —— 协议侧开销基线（分片/控制帧占比，实测）
 fuzz/                 standalone differential fuzz engine
 docs/                 bt-mcp-interface-spec.html — Proxy/Host integration spec
 build.sh              build mock + Rust oracle, run every suite
+```
+
+## 两个使用角色
+
+- **设备端（server）**：`bt_mcp_server_t`——注册工具体/资源体，接 `initialize`、
+  跑 `tools/call`、推 `notifications/progress`。
+- **桥接端（client）**：`bt_mcp_client_t`——主动握手、发请求、按 id 匹配响应、
+  超时上抛；同一份 core，同一套 L3/L4。
+
+两者都可用 `bt_mcp_session_feed()` 一行把收到的字节喂进协议栈：
+
+```c
+/* port 的「收到数据」回调里 */
+bt_mcp_session_feed(&sess, data, len, my_l5_sink, my_ctx);
+/* 主循环节拍 */
+bt_mcp_session_tick(&sess, now_ms);
 ```
 
 ## Build & test
