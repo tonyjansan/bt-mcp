@@ -179,6 +179,20 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
 BT_MCP_MOCK=build/btmcp_mock_shared BT_MCP_MAX_REASM=1 \
     python3 tests/m3_session_harness.py 40
 
+echo "== 多会话 × 多线程压测 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_stress.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_stress -lpthread
+./build/test_stress
+if [ "${BT_MCP_TSAN:-0}" = "1" ]; then
+    $CC -O1 -g -std=c99 -fsanitize=thread -Icore/include \
+       tests/test_stress.c core/src/frame.c core/src/session.c core/src/json.c \
+       core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+       core/src/err.c core/src/trace.c -o build/test_stress_tsan -lpthread
+    ./build/test_stress_tsan
+fi
+
 echo "== 多会话隔离 =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_multisession.c core/src/frame.c core/src/session.c \

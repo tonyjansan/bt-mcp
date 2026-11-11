@@ -78,6 +78,15 @@ jobs:
              core/src/trace.c -o build/test_shared_reasm1
           ./build/test_shared_reasm1
 
+      - name: Multi-session stress (4x4) under TSan
+        run: |
+          cc -O1 -g -std=c99 -fsanitize=thread -Icore/include \
+             tests/test_stress.c core/src/frame.c core/src/session.c \
+             core/src/json.c core/src/writer.c core/src/mcp_server.c \
+             core/src/mcp_client.c core/src/err.c core/src/trace.c \
+             -o build/test_stress_tsan -lpthread
+          ./build/test_stress_tsan
+
       - name: Multi-instance concurrency under TSan
         run: |
           cc -O1 -g -std=c99 -fsanitize=thread -Icore/include \
