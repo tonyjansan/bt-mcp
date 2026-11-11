@@ -65,6 +65,9 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
+echo "== MCP golden transcript 回归 =="
+python3 tests/golden_replay.py
+
 echo "== MCP 规范结构符合性 =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_conformance.c core/src/frame.c core/src/session.c core/src/json.c \
@@ -78,6 +81,21 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c \
    -o build/test_reentrancy
 ./build/test_reentrancy
+
+echo "== 多实例并发（TSan） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_threads.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c core/src/err.c \
+   core/src/trace.c -o build/test_threads -lpthread
+./build/test_threads
+# TSan 构建（--tsan 模式时不做，避免每次全量都变慢；CI 单独跑）
+if [ "${BT_MCP_TSAN:-0}" = "1" ]; then
+    $CC -O1 -g -std=c99 -fsanitize=thread -Icore/include \
+       tests/test_threads.c core/src/frame.c core/src/session.c core/src/json.c \
+       core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+       core/src/err.c core/src/trace.c -o build/test_threads_tsan -lpthread
+    ./build/test_threads_tsan
+fi
 
 echo "== Bridge 客户端端到端（client L5 ↔ server L5） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \

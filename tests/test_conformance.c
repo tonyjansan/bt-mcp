@@ -228,6 +228,15 @@ int main(void)
                               (uint32_t)strlen(ini)) == 0, "initialized ack");
     }
 
+    /* ---- 1b. ping 必须是空结果对象（规范要求） ---- */
+    {
+        CHECK(rpc("{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}",
+                  &r) == 0, "ping responds");
+        const char *rs; uint32_t rsl;
+        CHECK(!bt_mcp_json_top_raw(&r, "result", &rs, &rsl) && rsl == 2
+              && rs[0] == '{' && rs[1] == '}', "ping result is empty object");
+    }
+
     /* ---- 2. tools/list：每项必须有 name/description/inputSchema ---- */
     {
         CHECK(rpc("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",

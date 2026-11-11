@@ -48,6 +48,10 @@ struct bt_mcp_client {
     uint8_t            initialized;
     uint32_t           init_id;        /* initialize 的请求 id（0=未发起） */
     bt_mcp_client_req_t req[BT_MCP_CFG_MAX_PENDING];
+    /* 请求拼装缓冲：每实例独立（v0.5 修：v0.4 是模块级 static，
+     * 桥接同时连两台设备/两线程各持一个 client 时会互相覆盖） */
+    char                cbuf[BT_MCP_CFG_MAX_MSG];
+    char                sbuf[BT_MCP_CFG_MAX_MSG];
 };
 
 typedef struct bt_mcp_client bt_mcp_client_t;

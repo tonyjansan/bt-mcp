@@ -15,8 +15,7 @@
 
 #define BT_MCP_CLIENT_TIMEOUT_CODE (-32000)
 
-static char g_cbuf[BT_MCP_CFG_MAX_MSG];   /* 通用拼装区 */
-static char g_sbuf[BT_MCP_CFG_MAX_MSG];   /* 发送信封（与 params 源隔离，防别名） */
+/* 拼装缓冲已移入 bt_mcp_client_t（v0.5：每实例独立，避免多实例/多线程互相覆盖） */
 
 int bt_mcp_client_init(bt_mcp_client_t *c, bt_mcp_session_t *s,
                        bt_mcp_client_cb_t cb, void *user)
@@ -67,23 +66,24 @@ static int send_request(bt_mcp_client_t *c, const char *method,
     if (!req_alloc(c, id)) return BT_MCP_E_NOMEM;
 
     size_t n = 0;
-    int w = snprintf(g_sbuf, sizeof g_sbuf,
+    char *sbuf = c->sbuf;
+    int w = snprintf(sbuf, sizeof c->sbuf,
                      "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\"",
                      (unsigned)id, method);
-    if (w < 0 || (size_t)w >= sizeof g_sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
+    if (w < 0 || (size_t)w >= sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
     n = (size_t)w;
     if (params_json) {
-        w = snprintf(g_sbuf + n, sizeof g_sbuf - n, ",\"params\":");
-        if (w < 0 || n + (size_t)w >= sizeof g_sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
+        w = snprintf(sbuf + n, sizeof c->sbuf - n, ",\"params\":");
+        if (w < 0 || n + (size_t)w >= sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
         n += (size_t)w;
-        if (n + params_len + 1 > sizeof g_sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-        memmove(g_sbuf + n, params_json, params_len);   /* 源可能就是 g_cbuf，安全 */
+        if (n + params_len + 1 > sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
+        memmove(sbuf + n, params_json, params_len);   /* 源可能就是本实例的 cbuf，安全 */
         n += params_len;
     }
-    if (n + 1 > sizeof g_sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-    g_sbuf[n++] = '}';
+    if (n + 1 > sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
+    sbuf[n++] = '}';
 
-    int rc = bt_mcp_session_tx(c->sess, (const uint8_t *)g_sbuf, (uint32_t)n);
+    int rc = bt_mcp_session_tx(c->sess, (const uint8_t *)sbuf, (uint32_t)n);
     if (rc) { req_find(c, id)->in_use = 0; return rc; }
     if (out_id) *out_id = id;
     return BT_MCP_OK;
@@ -128,20 +128,21 @@ int bt_mcp_client_call_tool(bt_mcp_client_t *c, const char *name,
 {
     if (!name) return BT_MCP_E_ARGS;
     size_t n = 0;
-    int w = snprintf(g_cbuf, sizeof g_cbuf, "{\"name\":\"%s\",\"arguments\":", name);
-    if (w < 0 || (size_t)w >= sizeof g_cbuf) return BT_MCP_E_TOOBIG;
+    char *cbuf = c->cbuf;
+    int w = snprintf(cbuf, sizeof c->cbuf, "{\"name\":\"%s\",\"arguments\":", name);
+    if (w < 0 || (size_t)w >= sizeof c->cbuf) return BT_MCP_E_TOOBIG;
     n = (size_t)w;
     if (args_json && args_len) {
-        if (n + args_len + 1 > sizeof g_cbuf) return BT_MCP_E_TOOBIG;
-        memcpy(g_cbuf + n, args_json, args_len);
+        if (n + args_len + 1 > sizeof c->cbuf) return BT_MCP_E_TOOBIG;
+        memcpy(cbuf + n, args_json, args_len);
         n += args_len;
     } else {
-        if (n + 2 > sizeof g_cbuf) return BT_MCP_E_TOOBIG;
-        g_cbuf[n++] = '{';
-        g_cbuf[n++] = '}';
+        if (n + 2 > sizeof c->cbuf) return BT_MCP_E_TOOBIG;
+        cbuf[n++] = '{';
+        cbuf[n++] = '}';
     }
-    g_cbuf[n++] = '}';
-    return send_request(c, "tools/call", g_cbuf, (uint32_t)n, out_id);
+    cbuf[n++] = '}';
+    return send_request(c, "tools/call", cbuf, (uint32_t)n, out_id);
 }
 
 int bt_mcp_client_read_resource(bt_mcp_client_t *c, const char *uri, uint32_t *out_id)

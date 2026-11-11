@@ -617,10 +617,12 @@ static int body_empty(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void *arg)
     return BT_MCP_OK;
 }
 
+/* MCP 规范：ping 的响应必须是**空结果对象** {}（不是 {"pong":true}）。
+ * v0.4 golden 核对时发现并修正。 */
 static int body_ping(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void *arg)
 {
-    (void)r; (void)arg;
-    return kv_raw_new(w, "pong", "true", 4);
+    (void)r; (void)arg; (void)w;
+    return BT_MCP_OK;
 }
 
 /* ---- tools ---- */

@@ -1,0 +1,219 @@
+{
+  "desc": "prompts.list/get、logging.setLevel、授权（consent/restricted）、富内容",
+  "steps": [
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {}
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "tools": {
+              "listChanged": true
+            },
+            "resources": {
+              "subscribe": true,
+              "listChanged": true
+            },
+            "prompts": {
+              "listChanged": true
+            },
+            "logging": {}
+          },
+          "serverInfo": {
+            "name": "bt-mcp-device",
+            "version": "0.4"
+          },
+          "_meta": {
+            "io.btmcp/ver": "0.4",
+            "io.btmcp/chan": {
+              "kind": 1,
+              "mtu": 244,
+              "window": 4,
+              "reliable": 1,
+              "flow": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prompts/list"
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "prompts": [
+            {
+              "name": "greet",
+              "title": "Greet",
+              "description": "greeting prompt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prompts/get",
+        "params": {
+          "name": "greet"
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "description": "A friendly greeting",
+          "messages": [
+            {
+              "role": "user",
+              "content": {
+                "type": "text",
+                "text": "hello"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "logging/setLevel",
+        "params": {
+          "level": "debug"
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {}
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+          "name": "restricted_tool"
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32003,
+          "message": "Permission denied"
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+          "name": "consent_tool",
+          "arguments": {}
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "error": {
+          "code": -32003,
+          "message": "Permission denied"
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "consent_tool",
+          "arguments": {
+            "allow": true
+          }
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "allowed"
+            }
+          ],
+          "isError": false
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+          "name": "rich_tool"
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "plain"
+            },
+            {
+              "type": "text",
+              "text": "second"
+            },
+            {
+              "type": "image",
+              "data": "aGVsbG8=",
+              "mimeType": "image/png"
+            },
+            {
+              "type": "audio",
+              "data": "AAEC",
+              "mimeType": "audio/wav"
+            },
+            {
+              "type": "resource",
+              "resource": {
+                "uri": "bt-mcp://dev/log",
+                "mimeType": "text/plain",
+                "text": "res"
+              }
+            }
+          ],
+          "isError": false
+        }
+      }
+    }
+  ]
+}

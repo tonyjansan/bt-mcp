@@ -1,0 +1,165 @@
+{
+  "desc": "initialize / tools.list / tools.call 文本结果 / ping / 未知方法",
+  "steps": [
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {},
+          "clientInfo": {
+            "name": "golden",
+            "version": "1"
+          }
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "tools": {
+              "listChanged": true
+            },
+            "resources": {
+              "subscribe": true,
+              "listChanged": true
+            },
+            "prompts": {
+              "listChanged": true
+            },
+            "logging": {}
+          },
+          "serverInfo": {
+            "name": "bt-mcp-device",
+            "version": "0.4"
+          },
+          "_meta": {
+            "io.btmcp/ver": "0.4",
+            "io.btmcp/chan": {
+              "kind": 1,
+              "mtu": 244,
+              "window": 4,
+              "reliable": 1,
+              "flow": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list"
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "tools": [
+            {
+              "name": "echo",
+              "description": "echo text",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              }
+            },
+            {
+              "name": "consent_tool",
+              "title": "Consent tool",
+              "description": "needs consent",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "outputSchema": {
+                "type": "object"
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "idempotentHint": true
+              }
+            },
+            {
+              "name": "restricted_tool",
+              "description": "always denied",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "destructiveHint": true
+              }
+            },
+            {
+              "name": "rich_tool",
+              "description": "multi content",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+          "name": "echo",
+          "arguments": {
+            "text": "hi"
+          }
+        }
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ],
+          "isError": false
+        }
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "ping"
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {}
+      }
+    },
+    {
+      "req": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "nope"
+      },
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32601,
+          "message": "Method not found"
+        }
+      }
+    }
+  ]
+}

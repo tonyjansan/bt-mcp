@@ -50,10 +50,12 @@ $CC -O0 -g -std=c99 $COVFLAGS -DBT_MCP_CFG_FCS16=1 $INC \
     tests/test_fcs16.c core/src/frame.c core/src/trace.c -o "$OUT/t_fcs"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_conformance.c $CORE -o "$OUT/t_conf"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_threads.c $CORE -o "$OUT/t_thr" -lpthread
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -61,7 +63,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

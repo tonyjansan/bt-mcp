@@ -1749,7 +1749,7 @@ fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
         return respond_err(sv, &r, -32002, "Server not initialized");
     }
     if r.method == b"notifications/cancelled" { return 0; }
-    if r.method == b"ping" { return respond(sv, &r, b"\"pong\":true"); }
+    if r.method == b"ping" { return respond(sv, &r, b""); }   /* 规范：空 result */
     if r.method == b"tools/list" {
         let body = tools_list(sv, &r);
         return respond(sv, &r, &body);
