@@ -58,6 +58,19 @@ static size_t q_bytes(const fq_t *q)
     return q->n ? q->off[q->n - 1] + q->len[q->n - 1] : 0;
 }
 
+/* 只统计 **MCP 数据帧**的数量（排除控制帧）。
+ * v0.6 引入空闲信用刷新后，tick 会周期性发 CREDIT 控制帧，
+ * 因此「有没有重传消息」必须按 MCP 帧计，不能按总字节计。 */
+static int q_mcp_frames(const fq_t *q)
+{
+    int n = 0;
+    for (int i = 0; i < q->n; i++) {
+        const uint8_t *f = q->buf + q->off[i];
+        if (q->len[i] >= BT_MCP_HDR_LEN && !(f[1] & BT_MCP_FLAG_CTRL)) n++;
+    }
+    return n;
+}
+
 /* 统计上抛消息数（L4 → L5 形态） */
 static int g_msgs;
 static void sink(void *u, const uint8_t *json, uint32_t len)
@@ -188,9 +201,9 @@ int main(void)
         bt_mcp_session_tx(&se_tx, (const uint8_t *)msg, 400);
         uint8_t ack[2] = { BT_MCP_CTRL_ACK, se_tx.txslot[0].seq };
         bt_mcp_session_rx(&se_tx, BT_MCP_KIND_CTRL, 0, ack, 2, NULL, NULL);
-        size_t before = q_bytes(&q);
+        int before = q_mcp_frames(&q);
         bt_mcp_session_tick(&se_tx, 5000);
-        CHECK(q_bytes(&q) == before, "ACKed message never retransmitted");
+        CHECK(q_mcp_frames(&q) == before, "ACKed message never retransmitted");
     }
 
     /* ---- 7. 槽满后补不齐 → 最终弃槽（不永久占死缓冲） ---- */
@@ -339,9 +352,9 @@ int main(void)
         for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++)
             if (se_tx.txslot[i].valid) { slot_tx = i; break; }
         CHECK(slot_tx < 0, "plain tx: no retx slot for >512B");
-        size_t b0 = q_bytes(&q);
+        int f0 = q_mcp_frames(&q);
         bt_mcp_session_tick(&se_tx, 5000);
-        CHECK(q_bytes(&q) == b0, "plain tx: no retransmit after timeout");
+        CHECK(q_mcp_frames(&q) == f0, "plain tx: no retransmit after timeout");
 
         /* 15b：tx_ref 登记槽（引用原文）→ 超时后整条重发，内容一致 */
         setup(244);

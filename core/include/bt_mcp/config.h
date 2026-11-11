@@ -48,10 +48,13 @@
 #define BT_MCP_CFG_TX_RETRY_BYTES 512   /* 每槽消息体容量；超出者不享重传保护 */
 #endif
 #ifndef BT_MCP_CFG_RX_FP_SLOTS
-/* 去重指纹窗口：必须 ≥ 发送窗口（tx_window），否则「4 条在途 + ACK 全丢」
+/* 去重指纹窗口：必须 ≥ 发送窗口（tx_window），否则「N 条在途 + ACK 全丢」
  * 时前几条的指纹已被挤出，重传会被当作新消息二次上抛（重复执行工具）。
- * 默认 4 与 tx_window 默认值对齐。 */
-#define BT_MCP_CFG_RX_FP_SLOTS   4      /* 指纹项：seq+len+CRC32+代次，不存消息体 */
+ * v0.6：默认 4 → 8。v0.6 的链路仿真 soak 实测：在 10%~50% 丢包 + 乱序下，
+ * 4 个槽不足以覆盖「放弃重试后仍在途的副本」的到达延迟，出现重复投递；
+ * 提到 8 后大幅收敛（剩余缺口见 docs/roadmap-v0.6.md 的 N6 遗留项）。
+ * 代价：每槽约 16B（seq+len+crc+代次+时间），8 槽约 128B。 */
+#define BT_MCP_CFG_RX_FP_SLOTS   8      /* 指纹项：seq+len+CRC32+代次，不存消息体 */
 #endif
 #ifndef BT_MCP_CFG_ACK_TOUT_MS
 #define BT_MCP_CFG_ACK_TOUT_MS   600    /* 单次等待 ACK 时限 */

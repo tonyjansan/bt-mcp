@@ -71,10 +71,11 @@ const RESUME_TOUT: u32 = 5000;
 const REQ_TOUT: u32 = 30000;
 const TX_SLOTS: usize = 2;
 const TX_RETRY_BYTES: usize = 512;
-const RX_FP_SLOTS: usize = 4;
+const RX_FP_SLOTS: usize = 8;   /* v0.6：与 C 的 BT_MCP_CFG_RX_FP_SLOTS 对齐 */
 const DEDUPE_MS: u32 = 5000;
 const ACK_TOUT: u32 = 600;
-const RTO_MAX: u32 = 4800;   /* v0.5 V9：指数退避上限 */
+const RTO_MAX: u32 = 4800;         /* v0.5 V9：指数退避上限 */
+const CREDIT_REFRESH: u32 = 600;   /* v0.6：空闲信用刷新周期 */
 const MAX_RETRY: u8 = 3;
 const RESUME_MAX_FAIL: u8 = 3;
 const RESUME_LOCK_MS: u32 = 30000;
@@ -252,6 +253,7 @@ struct Sess {
     rx_fp: Vec<RxFp>, rx_fp_next: usize, rx_msg_no: u32,
     consumed: u16, peer_consumed: u16,
     retry_max: u8, ack_tout: u32, rto_cur: u32, rto_base: u32,
+    last_ctrl_ms: u32,
     stat_tx_retransmit: u32, stat_tx_dropped: u32, stat_rx_dup: u32,
     now_ms: u32,
     /* 差分输出累积 */
@@ -288,6 +290,7 @@ impl Sess {
             rx_fp_next: 0, rx_msg_no: 0, consumed: 0, peer_consumed: 0,
             retry_max: MAX_RETRY, ack_tout: ACK_TOUT,
             rto_cur: ACK_TOUT, rto_base: ACK_TOUT,
+            last_ctrl_ms: 0,
             stat_tx_retransmit: 0, stat_tx_dropped: 0, stat_rx_dup: 0,
             now_ms: 0,
             wire: Vec::new(), msgs: Vec::new(),
@@ -850,6 +853,16 @@ impl Sess {
             }
         }
         let _ = self.pump();
+
+        /* v0.6：空闲信用刷新（与 C 同）。累计 CREDIT 幂等，重发可自愈「丢一个」。 */
+        if self.credit_on()
+            && (self.state == SState::Ready || self.state == SState::LinkUp)
+            && now.wrapping_sub(self.last_ctrl_ms) >= CREDIT_REFRESH {
+            let cum = self.consumed.to_le_bytes();
+            if self.ctrl_frame(C_CREDIT, &cum) == 0 {
+                self.last_ctrl_ms = now;
+            }
+        }
     }
 }
 

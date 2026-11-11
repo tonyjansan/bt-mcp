@@ -5,9 +5,9 @@
     "max_msg": 1024,
     "max_reasm": 2,
     "server": 6624,
-    "session": 808,
+    "session": 872,
     "shared": 0,
-    "total_core": 10584,
+    "total_core": 10648,
     "tx_slots": 2
   },
   "COMPACT/fcs16": {
@@ -16,9 +16,9 @@
     "max_msg": 1024,
     "max_reasm": 2,
     "server": 6624,
-    "session": 808,
+    "session": 872,
     "shared": 0,
-    "total_core": 10584,
+    "total_core": 10648,
     "tx_slots": 2
   },
   "COMPACT/shared_reasm": {
@@ -27,9 +27,9 @@
     "max_msg": 1024,
     "max_reasm": 1,
     "server": 6624,
-    "session": 808,
+    "session": 872,
     "shared": 1,
-    "total_core": 9544,
+    "total_core": 9608,
     "tx_slots": 2
   },
   "COMPACT/trace": {
@@ -38,9 +38,9 @@
     "max_msg": 1024,
     "max_reasm": 2,
     "server": 6624,
-    "session": 808,
+    "session": 872,
     "shared": 0,
-    "total_core": 10584,
+    "total_core": 10648,
     "tx_slots": 2
   },
   "FULL/default": {
@@ -49,9 +49,9 @@
     "max_msg": 8192,
     "max_reasm": 4,
     "server": 14048,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 56440,
+    "total_core": 56504,
     "tx_slots": 2
   },
   "FULL/fcs16": {
@@ -60,9 +60,9 @@
     "max_msg": 8192,
     "max_reasm": 4,
     "server": 14048,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 56440,
+    "total_core": 56504,
     "tx_slots": 2
   },
   "FULL/shared_reasm": {
@@ -71,9 +71,9 @@
     "max_msg": 8192,
     "max_reasm": 1,
     "server": 14048,
-    "session": 1320,
+    "session": 1384,
     "shared": 1,
-    "total_core": 31816,
+    "total_core": 31880,
     "tx_slots": 2
   },
   "FULL/trace": {
@@ -82,9 +82,9 @@
     "max_msg": 8192,
     "max_reasm": 4,
     "server": 14048,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 56440,
+    "total_core": 56504,
     "tx_slots": 2
   },
   "STANDARD/default": {
@@ -93,9 +93,9 @@
     "max_msg": 2048,
     "max_reasm": 4,
     "server": 7776,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 19448,
+    "total_core": 19512,
     "tx_slots": 2
   },
   "STANDARD/fcs16": {
@@ -104,9 +104,9 @@
     "max_msg": 2048,
     "max_reasm": 4,
     "server": 7776,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 19448,
+    "total_core": 19512,
     "tx_slots": 2
   },
   "STANDARD/shared_reasm": {
@@ -115,9 +115,9 @@
     "max_msg": 2048,
     "max_reasm": 1,
     "server": 7776,
-    "session": 1320,
+    "session": 1384,
     "shared": 1,
-    "total_core": 13256,
+    "total_core": 13320,
     "tx_slots": 2
   },
   "STANDARD/trace": {
@@ -126,9 +126,9 @@
     "max_msg": 2048,
     "max_reasm": 4,
     "server": 7776,
-    "session": 1320,
+    "session": 1384,
     "shared": 0,
-    "total_core": 19448,
+    "total_core": 19512,
     "tx_slots": 2
   }
 }
