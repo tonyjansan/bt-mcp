@@ -1311,7 +1311,7 @@ fn body_initialize(sv: &McpSrv, r: &Req) -> Vec<u8> {
 
 impl McpSrv {
     fn sess_fw(&self) -> (String, String) {
-        ("bt-mcp-device".to_string(), "0.3".to_string())
+        ("bt-mcp-device".to_string(), "0.4".to_string())
     }
     /* (kind, mtu, window, reliable, flow) */
     fn sess_cap(&self) -> (u32, u32, u32, u32, u32) {
