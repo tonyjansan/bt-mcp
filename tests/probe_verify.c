@@ -109,12 +109,14 @@ static void probeB(void)
     CHECK(g_msgs == 1, "B(non-FCS): no link-level check by design");
 #endif
 
-    /* B2: framer_reset clears FCS state mid-frame */
-    uint8_t partial[16]; memcpy(partial, v.b, 16);
+    /* B2: framer_reset clears FCS state mid-frame — use a FRESH clean frame */
+    size_t vn0 = v.n;
+    bt_mcp_session_tx(&s, (const uint8_t *)big, 700);   /* fresh clean frame */
+    uint8_t partial[16]; memcpy(partial, v.b + vn0, 16);
     bt_mcp_framer_feed(&f, partial, 16, fr_sink, &s);   /* partial header+fcs+payload */
     bt_mcp_framer_reset(&f);
     g_msgs = 0;
-    bt_mcp_framer_feed(&f, v.b, (uint16_t)v.n, fr_sink, &s); /* must parse cleanly */
+    bt_mcp_framer_feed(&f, v.b + vn0, (uint16_t)(v.n - vn0), fr_sink, &s);
     CHECK(g_msgs == 1, "B2: framer_reset clears FCS stream state");
 }
 
@@ -193,9 +195,17 @@ static void probeD(void)
     while (off < vr.n) {
         uint8_t hdr[6]; memcpy(hdr, vr.b + off, 6);
         uint16_t plen = (uint16_t)(hdr[4] | (hdr[5] << 8));
+#if BT_MCP_CFG_FCS16
+        uint16_t flen = (uint16_t)(6 + 2 + plen);
+#else
         uint16_t flen = (uint16_t)(6 + plen);
+#endif
         int is_ctrl = (hdr[1] & BT_MCP_FLAG_CTRL) != 0;
+#if BT_MCP_CFG_FCS16
+        uint8_t type = vr.b[off + 8];
+#else
         uint8_t type = vr.b[off + 6];
+#endif
         if (is_ctrl && type == BT_MCP_CTRL_CREDIT) {
             got_credit = 1; flags.drop_credit = 1; (void)flags.drop_credit;
             off += flen; continue;              /* CREDIT LOST */
@@ -264,9 +274,17 @@ static void probeF(void)
     while (off < v.n) {
         uint8_t hdr[6]; memcpy(hdr, v.b + off, 6);
         uint16_t pl = (uint16_t)(hdr[4] | (hdr[5] << 8));
-        flen[idxn] = (uint16_t)(6 + pl);
-        memcpy(frag[idxn], v.b + off, flen[idxn]);
-        idxn++; off += flen[idxn - 1];
+#if BT_MCP_CFG_FCS16
+        uint16_t fl = (uint16_t)(6 + 2 + pl);
+#else
+        uint16_t fl = (uint16_t)(6 + pl);
+#endif
+        if (idxn < 64 && fl <= sizeof frag[0]) {
+            flen[idxn] = fl;
+            memcpy(frag[idxn], v.b + off, fl);
+            idxn++;
+        }
+        off += fl;
     }
     g_msgs = 0;
     /* 5 gap episodes, each healed: episodes 1-4 deliverable, 5th should still work */
@@ -402,15 +420,15 @@ static void probeJ(void)
 
 int main(void)
 {
-    probeA();
-    probeB();
-    probeC();
-    probeD();
-    probeE();
-    probeF();
-    probeG();
-    probeH();
-    probeI();
+    printf("A\n"); fflush(stdout); probeA();
+    printf("B\n"); fflush(stdout); probeB();
+    printf("C\n"); fflush(stdout); probeC();
+    printf("D\n"); fflush(stdout); probeD();
+    printf("E\n"); fflush(stdout); probeE();
+    printf("F\n"); fflush(stdout); probeF();
+    printf("G\n"); fflush(stdout); probeG();
+    printf("H\n"); fflush(stdout); probeH();
+    printf("I\n"); fflush(stdout); probeI();
     probeJ();
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
