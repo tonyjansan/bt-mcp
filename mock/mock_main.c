@@ -204,13 +204,18 @@ static int tool_fail_pipe(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
 static int tool_rich(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
                      bt_mcp_call_t *c, void *user)
 {
-    (void)r; (void)c; (void)user;
+    (void)r; (void)user;
     int rc = bt_mcp_w_raw(w, "plain", 5);            /* 裸写 → 文本项 */
     if (!rc) rc = bt_mcp_w_content_text(w, "second", 6);
     if (!rc) rc = bt_mcp_w_content_image(w, "aGVsbG8=", 8, "image/png");
     if (!rc) rc = bt_mcp_w_content_audio(w, "AAEC", 4, "audio/wav");
     if (!rc) rc = bt_mcp_w_content_resource(w, "bt-mcp://dev/log", "text/plain",
                                             "res", 3);
+    /* v0.5 V5：结果级 _meta（走 call_set_meta，由 server 在 content 闭合后输出） */
+    {
+        static const char META[] = "\"io.btmcp/ver\":\"0.5\"";
+        if (!rc) rc = bt_mcp_call_set_meta(c, META, (uint32_t)(sizeof META - 1));
+    }
     return rc;
 }
 

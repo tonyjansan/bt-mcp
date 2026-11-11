@@ -417,7 +417,8 @@ int bt_mcp_call_cancelled(const bt_mcp_call_t *c)
     return (c && c->in_use && c->cancelled) ? 1 : 0;
 }
 
-int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
+static int progress_send(bt_mcp_call_t *c, uint64_t done, uint64_t total,
+                         const char *message)
 {
     if (!c || !c->srv || !c->has_progress) return BT_MCP_E_STATE;
     if (c->cancelled) return BT_MCP_E_CANCEL;
@@ -442,9 +443,35 @@ int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
                                                        ? 0xFFFFFFFFu : done));
     if (!rc && total) rc = kv_u32_new(&w, "total", (uint32_t)(total > 0xFFFFFFFFu
                                                              ? 0xFFFFFFFFu : total));
+    if (!rc && message) rc = kv_str_slice(&w, "message", message,
+                                          (uint32_t)strlen(message));
     if (!rc) rc = bt_mcp_w_raw(&w, "}}", 2);
     if (rc) return rc;
     return tx_response(c->srv, pbuf, ms.len);
+}
+
+int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
+{
+    return progress_send(c, done, total, NULL);
+}
+
+int bt_mcp_call_progress_msg(bt_mcp_call_t *c, uint64_t done, uint64_t total,
+                             const char *message)
+{
+    return progress_send(c, done, total, message);
+}
+
+int bt_mcp_w_meta(bt_mcp_writer_t *w, const char *name,
+                  const char *json, uint32_t len)
+{
+    if (!w || !name || (!json && len)) return BT_MCP_E_ARGS;
+    int rc = kv_open(w, "_meta");
+    if (!rc) rc = bt_mcp_w_raw(w, "{", 1);
+    if (!rc) { w->need_comma = 0; rc = kv_str_slice(w, name, json ? json : "",
+                                                    len); }
+    if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
+    w->need_comma = 1;
+    return rc;
 }
 
 /* ---- 结果拼装（同步 / 异步共用） ---- */
@@ -468,16 +495,33 @@ static int tool_result_begin(bt_mcp_writer_t *w, const bt_mcp_call_t *c)
     return rc;
 }
 
-/* 内容数组收尾 + isError；close_result=1 时再关 result 对象（异步路径） */
+/* 内容数组收尾 + isError（+ 可选 _meta）；close_result=1 时再关 result 对象 */
 static int tool_result_end(bt_mcp_writer_t *w, cs_t *c, int is_error,
-                           int close_result)
+                           int close_result, const bt_mcp_call_t *call)
 {
     int rc = cs_end(c);
+    /* v0.5 V5：_meta 属于 result 对象，必须在 content 数组闭合之后写
+     * （放在 isError 之前：先元数据、后结果状态，读起来更自然） */
+    if (!rc && call && call->meta_len) {
+        rc = bt_mcp_w_raw(w, ",\"_meta\":{", sizeof ",\"_meta\":{" - 1);
+        if (!rc) rc = bt_mcp_w_raw(w, call->meta, call->meta_len);
+        if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
+    }
     if (!rc) rc = bt_mcp_w_raw(w, ",\"isError\":", sizeof ",\"isError\":" - 1);
     if (!rc) rc = bt_mcp_w_raw(w, is_error ? "true" : "false",
                                is_error ? 4 : 5);
     if (!rc && close_result) rc = bt_mcp_w_end(w);
     return rc;
+}
+
+int bt_mcp_call_set_meta(bt_mcp_call_t *c, const char *json, uint32_t len)
+{
+    if (!c || !c->in_use) return BT_MCP_E_ARGS;
+    if (!json && len) return BT_MCP_E_ARGS;
+    if (len > sizeof c->meta) return BT_MCP_E_TOOBIG;
+    if (len) memcpy(c->meta, json, len);
+    c->meta_len = (uint16_t)len;
+    return BT_MCP_OK;
 }
 
 static int send_tool_result(bt_mcp_server_t *sv, const bt_mcp_call_t *c,
@@ -488,7 +532,7 @@ static int send_tool_result(bt_mcp_server_t *sv, const bt_mcp_call_t *c,
     cs_t cs = { &w, 0, 0, 0 };
     int rc = tool_result_begin(&w, c);
     if (!rc) cs_put(&cs, text ? text : "", len);
-    if (!rc) rc = tool_result_end(&w, &cs, is_error, 1);   /* 异步：自己关 result */
+    if (!rc) rc = tool_result_end(&w, &cs, is_error, 1, c);  /* 异步：自己关 result */
     if (rc) return rc;
     return tx_response(sv, sv->rbuf, ms.len);
 }
@@ -931,14 +975,18 @@ static int body_tool_call(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void *
         c->in_callback = 0;
     }
     if (trc == BT_MCP_E_PENDING) return BT_MCP_E_PENDING;  /* 槽保持占用 */
-    call_free(c);
-    if (rc) return rc;
-    if (cs.err) return BT_MCP_E_TOOBIG;
+    if (rc) { call_free(c); return rc; }
+    if (cs.err) { call_free(c); return BT_MCP_E_TOOBIG; }
     /* 工具失败且没写任何内容 → 标准诊断文本 */
     if (trc != 0 && cs.items == 0) {
-        if (!cs_put(&cs, "tool error", 10) && cs.err) return BT_MCP_E_TOOBIG;
+        if (!cs_put(&cs, "tool error", 10) && cs.err) {
+            call_free(c);
+            return BT_MCP_E_TOOBIG;
+        }
     }
-    return tool_result_end(w, &cs, trc != 0, 0);           /* 同步：respond 负责关 */
+    rc = tool_result_end(w, &cs, trc != 0, 0, c);   /* 同步：respond 负责关 */
+    call_free(c);
+    return rc;
 }
 
 /* ---- notifications/cancelled ---- */

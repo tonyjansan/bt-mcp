@@ -60,6 +60,10 @@ static int tool_rich(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
     if (!rc) rc = bt_mcp_w_content_image(w, "aGk=", 4, "image/png");
     if (!rc) rc = bt_mcp_w_content_resource(w, "bt-mcp://dev/r", "text/plain",
                                             "x", 1);
+    {
+        static const char M[] = "\"io.btmcp/ver\":\"0.5\"";
+        if (!rc) rc = bt_mcp_call_set_meta(c, M, (uint32_t)(sizeof M - 1));
+    }
     return rc;
 }
 static int tool_fail(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
@@ -306,6 +310,21 @@ int main(void)
               "resource item");
         CHECK(mem_find(g_json, g_json_len, "\"uri\":\"bt-mcp://dev/r\"", sizeof "\"uri\":\"bt-mcp://dev/r\"" - 1) != NULL,
               "resource uri");
+        /* v0.5 V5：_meta 必须在 result 层（content 数组闭合之后），
+         * 不能掉进 content[] 里变成文本项 */
+        const char *meta = mem_find(g_json, g_json_len, "\"_meta\":{",
+                                   sizeof "\"_meta\":{" - 1);
+        const char *close = mem_find(g_json, g_json_len, "\"isError\"",
+                                    sizeof "\"isError\"" - 1);
+        CHECK(meta && close && meta < close, "_meta 在 result 层（isError 之前）");
+        /* 且 content 数组必须已闭合：content 的 ']' 出现在 _meta 之前 */
+        const char *carr = mem_find(g_json, g_json_len, "\"content\":[",
+                                   sizeof "\"content\":[" - 1);
+        const char *cend = carr ? mem_find(carr, g_json_len
+                                          - (size_t)(carr - (const char *)g_json),
+                                          "]", 1) : NULL;
+        CHECK(carr && meta && cend && cend < meta,
+              "content 数组在 _meta 之前闭合");
     }
 
     /* ---- 5. 工具失败：isError=true 且仍有 content（Host 才能展示原因）---- */

@@ -211,6 +211,9 @@
               }
             }
           ],
+          "_meta": {
+            "io.btmcp/ver": "0.5"
+          },
           "isError": false
         }
       }

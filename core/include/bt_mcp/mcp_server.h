@@ -167,6 +167,9 @@ struct bt_mcp_call {
     char     progress_str[BT_MCP_CFG_IDSTR_MAX];
     uint16_t progress_str_len;
     uint32_t t0;
+    /* 本次调用的 _meta 原文（由 bt_mcp_call_set_meta 写入，server 在 result 层输出） */
+    char     meta[BT_MCP_CFG_META_MAX];
+    uint16_t meta_len;
 };
 
 struct bt_mcp_server {
@@ -216,10 +219,26 @@ int  bt_mcp_server_log(bt_mcp_server_t *sv, uint8_t level, const char *logger,
 /* ---- 异步 tools/call 与进度（v0.3） ---- */
 int bt_mcp_server_complete(bt_mcp_call_t *call, const char *text, int is_error);
 int bt_mcp_call_progress(bt_mcp_call_t *call, uint64_t done, uint64_t total);
+/* 带人类可读 message 的进度通知（规范中 message 为可选字段，便于 Host 展示）。 */
+int bt_mcp_call_progress_msg(bt_mcp_call_t *call, uint64_t done, uint64_t total,
+                             const char *message);
 int bt_mcp_call_cancelled(const bt_mcp_call_t *call);
 
 /* ---- 富内容写入（v0.4）：在工具回调里通过 out 追加内容项 ---- */
 /* 显式文本项（等价于 bt_mcp_w_raw 的语义，但边界明确） */
+/* 在**当前结果对象**里追加一个 _meta 键（v0.5 V5：_meta 透传）。
+ * 规范允许任何对象带 `_meta`。name 是 _meta 内的键，json 是该键的 JSON 片段原文。
+ * 例：bt_mcp_w_meta(w, "io.btmcp/ver", "\"0.5\"", 5);
+ * 注意：只适用于**结果对象级**的 writer（如 prompts/get 的实现）；
+ * 工具回调拿到的是 content 写入器，_meta 请用 bt_mcp_call_set_meta()。 */
+int bt_mcp_w_meta(bt_mcp_writer_t *w, const char *name,
+                  const char *json, uint32_t len);
+
+/* 工具声明本次调用的 _meta（v0.5 V5）。json 是 **"key":value 形式的多组片段原文**，
+ * 例："\"io.btmcp/route\":\"ble\""；server 会在 result 层输出 {"_meta":{...}}。
+ * 必须在工具回调内、返回前调用；总长超过 BT_MCP_CFG_META_MAX 返回 E_TOOBIG。 */
+int bt_mcp_call_set_meta(bt_mcp_call_t *call, const char *json, uint32_t len);
+
 int bt_mcp_w_content_text(bt_mcp_writer_t *w, const char *text, uint32_t len);
 /* 图片：data 为**已 base64 编码**的字符串；mime 如 "image/png" */
 int bt_mcp_w_content_image(bt_mcp_writer_t *w, const char *b64, uint32_t b64len,

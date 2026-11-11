@@ -1701,6 +1701,8 @@ fn tool_rich_body() -> Vec<u8> {
     c.content_opaque("audio", b"AAEC", "audio/wav");
     c.content_resource("bt-mcp://dev/log", "text/plain", b"res");
     c.end();
+    /* v0.5 V5：_meta 在 isError 之前（与 C 侧同字节） */
+    c.b.extend_from_slice(b",\"_meta\":{\"io.btmcp/ver\":\"0.5\"}");
     c.b.extend_from_slice(b",\"isError\":false");
     c.b
 }

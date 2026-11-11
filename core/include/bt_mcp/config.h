@@ -120,6 +120,9 @@
 #ifndef BT_MCP_CFG_S2C_TOUT_MS
 #define BT_MCP_CFG_S2C_TOUT_MS   30000  /* S→C 请求超时 */
 #endif
+#ifndef BT_MCP_CFG_META_MAX
+#define BT_MCP_CFG_META_MAX      256    /* 单次 tools/call 可携带的 _meta 原文上限 */
+#endif
 #ifndef BT_MCP_CFG_KEEPALIVE_MS
 #define BT_MCP_CFG_KEEPALIVE_MS  0      /* >0 时空闲该毫秒数后自动 PING（0=关闭） */
 #endif
