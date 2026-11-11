@@ -17,6 +17,7 @@
  * 9. tools/list 与 resources/list 支持 cursor 分页（每页 PAGE_SIZE 条）。
  */
 #include "bt_mcp/mcp_server.h"
+#include "bt_mcp/trace.h"
 #include "bt_mcp/err.h"
 #include "bt_mcp/session.h"
 #include <string.h>
@@ -170,14 +171,13 @@ static int method_is(const bt_mcp_json_req_t *r, const char *m)
     return r->method && r->method_len == ml && !memcmp(r->method, m, ml);
 }
 
-/* 响应缓冲：单写者模型下静态复用 */
-static char g_rbuf[BT_MCP_CFG_MAX_MSG];
+/* 响应缓冲已移入 bt_mcp_server_t（v0.4：每实例独立，避免多实例互相覆盖） */
 
 static int respond(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
                    int (*body)(bt_mcp_writer_t *, const bt_mcp_json_req_t *, void *),
                    void *arg)
 {
-    memsink_t ms = { g_rbuf, 0, sizeof g_rbuf };
+    memsink_t ms = { sv->rbuf, 0, sizeof sv->rbuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_begin_result_id(&w, r->id_num,
                                       r->id_is_str ? r->id_str : NULL,
@@ -186,14 +186,13 @@ static int respond(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
     if (rc) return rc;                       /* E_PENDING/E_TOOBIG：不发响应 */
     rc = bt_mcp_w_end(&w);
     if (rc) return rc;
-    return tx_response(sv, g_rbuf, ms.len);
+    return tx_response(sv, sv->rbuf, ms.len);
 }
 
 /* id 不可回显（超长字符串 id / 无法解析）时按 JSON-RPC 规范回 "id":null */
 static int respond_error_null_id(bt_mcp_server_t *sv, int code, const char *msg)
 {
-    static char ebuf[256];
-    memsink_t ms = { ebuf, 0, sizeof ebuf };
+    memsink_t ms = { sv->ebuf, 0, sizeof sv->ebuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     char head[64];
     int n = snprintf_int(head, sizeof head, code);
@@ -205,7 +204,7 @@ static int respond_error_null_id(bt_mcp_server_t *sv, int code, const char *msg)
     if (!rc) rc = bt_mcp_w_str_lit(&w, msg);
     if (!rc) rc = bt_mcp_w_raw(&w, "}}", 2);
     if (rc) return rc;
-    return tx_response(sv, ebuf, ms.len);
+    return tx_response(sv, sv->ebuf, ms.len);
 }
 
 static int respond_error(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
@@ -214,14 +213,13 @@ static int respond_error(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
     /* 超长字符串 id 无法安全回显：改用 null id + -32600（Invariant: 必发响应） */
     if (r->id_is_str && r->id_str_len >= BT_MCP_CFG_IDSTR_MAX)
         return respond_error_null_id(sv, -32600, "Invalid request id");
-    static char ebuf[288];
-    memsink_t ms = { ebuf, 0, sizeof ebuf };
+    memsink_t ms = { sv->ebuf, 0, sizeof sv->ebuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_begin_error_id(&w, r->id_num,
                                      r->id_is_str ? r->id_str : NULL,
                                      r->id_str_len, code, msg);
     if (rc) return rc;
-    return tx_response(sv, ebuf, ms.len);
+    return tx_response(sv, sv->ebuf, ms.len);
 }
 
 /* ---- 调用槽（异步 tools/call） ---- */
@@ -261,8 +259,9 @@ int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
 {
     if (!c || !c->srv || !c->has_progress) return BT_MCP_E_STATE;
     if (c->cancelled) return BT_MCP_E_CANCEL;   /* 取消后不再发进度通知 */
-    static char pbuf[192];
-    memsink_t ms = { pbuf, 0, sizeof pbuf };
+    char *pbuf = c->srv ? c->srv->nbuf : NULL;
+    if (!pbuf) return BT_MCP_E_STATE;
+    memsink_t ms = { pbuf, 0, BT_MCP_CFG_NOTIFY_BUF };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_raw(&w, "{\"jsonrpc\":\"2.0\",\"method\":"
                                "\"notifications/progress\",\"params\":{",
@@ -305,7 +304,7 @@ static int write_content_suffix(bt_mcp_writer_t *w, int is_error)
 static int send_tool_result(bt_mcp_server_t *sv, const bt_mcp_call_t *c,
                             const char *text, uint32_t len, int is_error)
 {
-    memsink_t ms = { g_rbuf, 0, sizeof g_rbuf };
+    memsink_t ms = { sv->rbuf, 0, sizeof sv->rbuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_begin_result_id(&w, c->id_num,
                                       c->id_is_str ? c->id_str : NULL,
@@ -320,13 +319,13 @@ static int send_tool_result(bt_mcp_server_t *sv, const bt_mcp_call_t *c,
     if (!rc) rc = write_content_suffix(&w, is_error);
     if (!rc) rc = bt_mcp_w_end(&w);
     if (rc) return rc;
-    return tx_response(sv, g_rbuf, ms.len);
+    return tx_response(sv, sv->rbuf, ms.len);
 }
 
 int bt_mcp_server_complete(bt_mcp_call_t *c, const char *text, int is_error)
 {
     if (!c || !c->in_use || !c->srv) return BT_MCP_E_ARGS;
-    /* 回调内同步 complete 会与 respond() 争用同一块静态响应缓冲（g_rbuf），
+    /* 回调内同步 complete 会与 respond() 争用同一块响应缓冲（sv->rbuf），
      * 且一次调用会产生两个响应——直接拒绝，要求走 E_PENDING 异步路径。 */
     if (c->in_callback) return BT_MCP_E_STATE;
     uint32_t n = 0;
@@ -680,6 +679,7 @@ static int handle_cancelled(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r)
 
 int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
 {
+    bt_mcp_trace(BT_MCP_TRACE_DBG, "l5:rx", json, (uint16_t)(len > 24 ? 24 : len));
     if (!sv || (!json && len)) return BT_MCP_E_ARGS;
     bt_mcp_json_req_t r;
     int rc = bt_mcp_json_parse((const char *)json, len, &r);
@@ -738,8 +738,8 @@ int bt_mcp_server_notify(bt_mcp_server_t *sv, const char *method,
                          const char *params_json, uint32_t params_len)
 {
     if (!sv || !method) return BT_MCP_E_ARGS;
-    static char buf[BT_MCP_CFG_NOTIFY_BUF];
-    memsink_t ms = { buf, 0, sizeof buf };
+    char *buf = sv->nbuf;
+    memsink_t ms = { buf, 0, BT_MCP_CFG_NOTIFY_BUF };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_raw(&w, "{\"jsonrpc\":\"2.0\",\"method\":",
         sizeof "{\"jsonrpc\":\"2.0\",\"method\":" - 1);

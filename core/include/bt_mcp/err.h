@@ -17,7 +17,13 @@ enum {
     BT_MCP_E_IO   = -8,   /* 底层 sink/transport 写失败 */
     BT_MCP_E_PENDING = -9,/* 工具已受理，结果稍后经 server_complete 送达 */
     BT_MCP_E_CANCEL = -10,/* 请求已被 notifications/cancelled 取消 */
-    BT_MCP_E_LOCKED = -11 /* RESUME 处于失败锁定窗口内 */
+    BT_MCP_E_LOCKED = -11,/* RESUME 处于失败锁定窗口内 */
+    BT_MCP_E_AUTHZ = -12, /* 授权拒绝（consent 未通过 / restricted） */
+    BT_MCP_E_BUSY  = -13  /* 在途请求数达上限（背压，稍后重试） */
 };
+
+/* 错误码 → 稳定短字符串（日志/诊断用；未知名回 "E_UNKNOWN"）。
+ * 返回的是静态常量字符串，调用方不得修改或释放。 */
+const char *bt_mcp_strerror(int rc);
 
 #endif

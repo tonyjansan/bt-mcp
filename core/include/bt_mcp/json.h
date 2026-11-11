@@ -47,6 +47,9 @@ int bt_mcp_json_get_str(const bt_mcp_json_req_t *r, const char *key,
 int bt_mcp_json_get_u32(const bt_mcp_json_req_t *r, const char *key, uint32_t *out);
 /* 有符号整数（JSON-RPC error.code 等为负值） */
 int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *out);
+/* 浮点数（工具参数常见 0.5 / -12.75 / 1e3）。不依赖 strtod，无 locale 影响；
+ * 值域/精度按 IEEE-754 double，超出范围返回 E_PARSE。 */
+int bt_mcp_json_get_f64(const bt_mcp_json_req_t *r, const char *key, double *out);
 int bt_mcp_json_get_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len);
 

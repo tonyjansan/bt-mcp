@@ -91,6 +91,9 @@
 #if BT_MCP_CFG_RX_FP_SLOTS < 1 || BT_MCP_CFG_RX_FP_SLOTS > 16
 #  error "BT_MCP_CFG_RX_FP_SLOTS must be 1..16"
 #endif
+#if BT_MCP_CFG_NOTIFY_BUF < 192
+#  error "BT_MCP_CFG_NOTIFY_BUF must be >= 192 (progress notification worst case)"
+#endif
 #if BT_MCP_CFG_MAX_FRAG < 1 || BT_MCP_CFG_MAX_FRAG > 255
 #  error "BT_MCP_CFG_MAX_FRAG must be 1..255 (u8 idx)"
 #endif
@@ -106,6 +109,10 @@
 /* 单片载荷 ≤255（u8 idx 分片数 × 255 需覆盖 MAX_MSG） */
 #if BT_MCP_CFG_MAX_FRAG * 255 < BT_MCP_CFG_MAX_MSG
 #  error "BT_MCP_CFG_MAX_FRAG too small for BT_MCP_CFG_MAX_MSG at 255B chunks"
+#endif
+
+#ifndef BT_MCP_CFG_TRACE
+#define BT_MCP_CFG_TRACE         0      /* 1 = 编译进追踪钩子（debug 构建用） */
 #endif
 
 /* 协商协议版本（initialize 回显与支持集判定见 mcp_server.c） */

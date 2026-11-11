@@ -25,7 +25,7 @@ jobs:
       - name: FCS16 round-trip (no link-level CRC channels)
         run: |
           cc -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 \
-             -Icore/include tests/test_fcs16.c core/src/frame.c \
+             -Icore/include tests/test_fcs16.c core/src/frame.c core/src/trace.c \
              -o build/test_fcs16
           ./build/test_fcs16
 
@@ -35,11 +35,11 @@ jobs:
       - name: Fuzz (1e7 rounds, crash-only gate)
         run: |
           cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
-             core/src/frame.c -o build/fuzz_frame
+             core/src/frame.c core/src/trace.c -o build/fuzz_frame
           ./build/fuzz_frame 10000000
           # FCS16 模式也要 fuzz（该模式无链路级校验，是被 fuzz 覆盖最少的路径）
           cc -O2 -std=c99 -Icore/include -DBT_MCP_CFG_FCS16=1 -DBT_MCP_FUZZ_MAIN \
-             fuzz/fuzz_frame.c core/src/frame.c -o build/fuzz_frame_fcs
+             fuzz/fuzz_frame.c core/src/frame.c core/src/trace.c -o build/fuzz_frame_fcs
           ./build/fuzz_frame_fcs 2000000
 
   long-run:

@@ -377,6 +377,71 @@ int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *ou
     return BT_MCP_OK;
 }
 
+/* RFC 8259 number → double。手写解析：不引 strtod（无 locale/大缓冲依赖），
+ * 精度按「整数部分逐位累加 + 小数部分逐位加权 + 十进制指数缩放」，
+ * 与本项目其它 getter 的饱和/严格风格一致。 */
+int bt_mcp_json_get_f64(const bt_mcp_json_req_t *r, const char *key, double *out)
+{
+    const char *v; uint32_t vl;
+    int rc = find_key(r, key, &v, &vl);
+    if (rc) return rc;
+    if (!vl) return BT_MCP_E_PARSE;
+
+    uint32_t i = 0;
+    int neg = 0;
+    if (v[0] == '-') { neg = 1; i = 1; }
+    if (i >= vl) return BT_MCP_E_PARSE;
+
+    double mant = 0.0;
+    int digits = 0;
+    while (i < vl && is_digit(v[i])) {           /* 整数部分 */
+        mant = mant * 10.0 + (double)(v[i] - '0');
+        i++; digits++;
+        if (mant > 1e308) return BT_MCP_E_PARSE;
+    }
+    if (i < vl && v[i] == '.') {                  /* 小数部分 */
+        i++;
+        double frac = 0.1;
+        while (i < vl && is_digit(v[i])) {
+            mant += (double)(v[i] - '0') * frac;
+            frac *= 0.1;
+            i++; digits++;
+        }
+    }
+    if (digits == 0) return BT_MCP_E_PARSE;
+
+    int exp10 = 0;
+    if (i < vl && (v[i] == 'e' || v[i] == 'E')) {
+        i++;
+        int eneg = 0;
+        if (i < vl && (v[i] == '+' || v[i] == '-')) { eneg = (v[i] == '-'); i++; }
+        int edig = 0;
+        while (i < vl && is_digit(v[i])) {
+            if (exp10 < 10000) exp10 = exp10 * 10 + (v[i] - '0');
+            i++; edig++;
+        }
+        if (!edig) return BT_MCP_E_PARSE;
+        if (eneg) exp10 = -exp10;
+    }
+    if (i != vl) return BT_MCP_E_PARSE;           /* 尾部有杂质：不是数字 */
+
+    /* double 值域护栏：|exp10| > 308 必溢出/下溢，直接拒（也保证幂表下标安全） */
+    if (exp10 > 308 || exp10 < -308) return BT_MCP_E_PARSE;
+    /* 十进制指数缩放：按 10 的整数幂累乘/累除，避免 pow() 依赖 libm。
+     * |exp10| ≤ 308 → 二进制位最多 9 位（256 位是最高位），表长 9 足够。 */
+    static const double pow10[] = { 1e1, 1e2, 1e4, 1e8, 1e16, 1e32, 1e64, 1e128, 1e256 };
+    int e = exp10 < 0 ? -exp10 : exp10;
+    double scale = 1.0;
+    for (int b = 0; e; b++, e >>= 1) {
+        if (e & 1) scale *= pow10[b];
+        if (scale > 1e308 || scale < 1e-308) return BT_MCP_E_PARSE;
+    }
+    double val = (exp10 < 0) ? mant / scale : mant * scale;
+    if (val > 1e308 || val < -1e308) return BT_MCP_E_PARSE;
+    *out = neg ? -val : val;
+    return BT_MCP_OK;
+}
+
 int bt_mcp_json_get_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len)
 {

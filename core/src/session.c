@@ -18,6 +18,7 @@
  *    - 去重：seq+len+CRC32 指纹窗口，重复消息回 ACK 但不再上抛 L5。
  */
 #include "bt_mcp/session.h"
+#include "bt_mcp/trace.h"
 #include "bt_mcp/err.h"
 #include <string.h>
 
@@ -111,6 +112,7 @@ static void clear_reliability(bt_mcp_session_t *s)
 
 void bt_mcp_session_link_up(bt_mcp_session_t *s, uint32_t resume_token)
 {
+    bt_mcp_trace(BT_MCP_TRACE_INFO, "session:link_up", &resume_token, 4);
     s->state = BT_MCP_S_LINK_UP;
     s->credits = s->cfg.tx_window;
     s->resume_pending = 0;
@@ -122,12 +124,14 @@ void bt_mcp_session_link_up(bt_mcp_session_t *s, uint32_t resume_token)
 
 void bt_mcp_session_mark_ready(bt_mcp_session_t *s)
 {
+    bt_mcp_trace(BT_MCP_TRACE_INFO, "session:mark_ready", NULL, 0);
     if (!s) return;
     if (s->state == BT_MCP_S_LINK_UP) s->state = BT_MCP_S_READY;
 }
 
 void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact)
 {
+    bt_mcp_trace(BT_MCP_TRACE_INFO, "session:link_down", &bond_intact, 1);
     s->state = BT_MCP_S_IDLE;
     s->req_inflight = 0;
     s->resume_pending = 0;
@@ -331,6 +335,8 @@ int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
         int dup = rx_dup_check(s, seq, payload, len);
         if (dup) {
             s->stat_rx_dup++;
+            bt_mcp_trace(BT_MCP_TRACE_DBG, "rx:dup_dropped", payload,
+                         (uint16_t)(len > 16 ? 16 : len));
             send_ack(s, seq);                    /* 重 ACK，不再上抛 */
             return BT_MCP_OK;
         }
@@ -445,6 +451,8 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
         if (!sl->valid) continue;
         if (s->now_ms - sl->t0 < s->cfg.ack_tout_ms) continue;
         if (sl->n >= s->cfg.retry_max) {
+            bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:drop_after_retries",
+                         &sl->seq, 1);
             sl->valid = 0;
             s->stat_tx_dropped++;
             /* 该消息确认永久丢失：退还发送时扣掉的信用，否则窗口单调泄漏 */
@@ -457,6 +465,7 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
         sl->t0 = s->now_ms;
         if (r) { rc = r; continue; }
         s->stat_tx_retransmit++;
+        bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:retransmit", &sl->seq, 1);
     }
     return rc;
 }

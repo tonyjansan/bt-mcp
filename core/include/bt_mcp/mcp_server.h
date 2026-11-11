@@ -91,8 +91,14 @@ struct bt_mcp_server {
     bt_mcp_server_cfg_t cfg;
     const char *fw_name, *fw_ver;
     uint8_t  initialized;    /* notifications/initialized 已到 */
+    uint8_t  log_level;      /* logging/setLevel 设定的最低级别 */
     uint32_t now_ms;
     struct bt_mcp_call calls[BT_MCP_CFG_MAX_PENDING];
+    /* 响应拼装缓冲：每实例独立（v0.4 修：v0.3 是文件级 static，
+     * 两个 server 实例会互相覆盖，桥接端同时连两台设备即触发） */
+    char     rbuf[BT_MCP_CFG_MAX_MSG];
+    char     ebuf[288];      /* 错误响应拼装（含 id，故比 rbuf 小得多） */
+    char     nbuf[BT_MCP_CFG_NOTIFY_BUF];  /* 通知拼装（progress / notify 共用） */
 };
 
 int  bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s,
