@@ -7,7 +7,11 @@
 int bt_mcp_w_raw(bt_mcp_writer_t *w, const char *data, uint32_t len)
 {
     if (!w || !w->put || !w->sink || (!data && len)) return BT_MCP_E_ARGS;
-    return w->put(w->sink, data, len) ? BT_MCP_E_IO : BT_MCP_OK;
+    /* v0.6：透传 sink 的错误码，不再压平成 E_IO。
+     * 原因：调用方需要区分「缓冲放不下（E_TOOBIG，可分段/换档）」与
+     * 「链路 I/O 故障（E_IO，要重连）」——两者的处置完全不同。
+     * v0.5 之前一律返回 E_IO，把小缓冲配置下的容量问题伪装成 I/O 故障。 */
+    return w->put(w->sink, data, len);
 }
 
 static int put_lit(bt_mcp_writer_t *w, const char *s)

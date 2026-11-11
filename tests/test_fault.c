@@ -113,7 +113,7 @@ int main(void)
         (void)m;
         wf.budget = 8;                    /* 只够写一小段 */
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_begin_result(&w, 1) == BT_MCP_E_IO, "begin_result fails on budget");
+        CHECK(bt_mcp_w_begin_result(&w, 1) == BT_MCP_E_TOOBIG, "begin_result -> E_TOOBIG on budget");
         wf.budget = 200;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
         CHECK(bt_mcp_w_begin_result(&w, 1) == BT_MCP_OK, "begin_result ok");
@@ -121,34 +121,34 @@ int main(void)
         /* 关键路径：kv 系列在预算不足时也要报错 */
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_kv_str(&w, "k", "v") == BT_MCP_E_IO, "kv_str fails on budget");
+        CHECK(bt_mcp_w_kv_str(&w, "k", "v") == BT_MCP_E_TOOBIG, "kv_str -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_kv_u32(&w, "k", 1) == BT_MCP_E_IO, "kv_u32 fails on budget");
+        CHECK(bt_mcp_w_kv_u32(&w, "k", 1) == BT_MCP_E_TOOBIG, "kv_u32 -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_kv_u64(&w, "k", 1) == BT_MCP_E_IO, "kv_u64 fails on budget");
+        CHECK(bt_mcp_w_kv_u64(&w, "k", 1) == BT_MCP_E_TOOBIG, "kv_u64 -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_kv_raw(&w, "k", "1", 1) == BT_MCP_E_IO, "kv_raw fails on budget");
+        CHECK(bt_mcp_w_kv_raw(&w, "k", "1", 1) == BT_MCP_E_TOOBIG, "kv_raw -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_str_lit(&w, "abc") == BT_MCP_E_IO, "str_lit fails on budget");
+        CHECK(bt_mcp_w_str_lit(&w, "abc") == BT_MCP_E_TOOBIG, "str_lit -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_key(&w, "k") == BT_MCP_E_IO, "w_key fails on budget");
+        CHECK(bt_mcp_w_key(&w, "k") == BT_MCP_E_TOOBIG, "w_key -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_begin_error(&w, 1, -32603, "x") == BT_MCP_E_IO,
-              "begin_error fails on budget");
+        CHECK(bt_mcp_w_begin_error(&w, 1, -32603, "x") == BT_MCP_E_TOOBIG,
+              "begin_error -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
         CHECK(bt_mcp_w_begin_error_id(&w, 1, NULL, 0, -32603, "x")
-              == BT_MCP_E_IO, "begin_error_id fails on budget");
+              == BT_MCP_E_TOOBIG, "begin_error_id -> E_TOOBIG on budget");
         wf.budget = 3;
         w.put = w_put; w.sink = &wf; w.need_comma = 0;
-        CHECK(bt_mcp_w_begin_result_id(&w, 1, "s", 1) == BT_MCP_E_IO,
-              "begin_result_id fails on budget");
+        CHECK(bt_mcp_w_begin_result_id(&w, 1, "s", 1) == BT_MCP_E_TOOBIG,
+              "begin_result_id -> E_TOOBIG on budget");
     }
 
     /* ---- 4. 帧层发送失败：MTU 非法 / 超 MAX_FRAG ---- */

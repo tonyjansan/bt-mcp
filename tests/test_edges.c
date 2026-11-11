@@ -55,9 +55,10 @@ static void test_writer_edges(void)
         bt_mcp_writer_t w = { .put = small_put, .sink = &s, .need_comma = 0 };
         int rc = BT_MCP_OK;
         for (int i = 0; i < 40 && !rc; i++) rc = bt_mcp_w_kv_str(&w, "k", "vvvvvvvv");
-        /* 契约：sink 返回任何失败 → writer 统一映射为 E_IO
-         * （sink 的具体错误码不透传，避免上层依赖实现细节） */
-        CHECK(rc == BT_MCP_E_IO, "writer reports overflow as E_IO");
+        /* 契约（v0.6 起）：writer **透传** sink 的错误码。
+         * 调用方需要区分「放不下（E_TOOBIG）」与「I/O 故障（E_IO）」，
+         * 二者处置不同（换档/分段 vs 重连）。 */
+        CHECK(rc == BT_MCP_E_TOOBIG, "writer propagates E_TOOBIG from sink");
     }
     /* 2. NULL 参数 */
     {

@@ -2,12 +2,14 @@
 # coverage.sh —— 覆盖率门禁（v0.4 G2）
 #
 # 跑核心单元/定向测试，产出 core/src 的行覆盖率与分支覆盖率，低于阈值则失败。
-# 用法： ./tools/coverage.sh [行阈值] [分支阈值]     默认 94 66
+# 用法： ./tools/coverage.sh [行阈值] [分支阈值]     默认 95 68
 #
 # 阈值的取法：**防回归**（略低于当前实测值），不是「跳到目标」。
 # 当前实测：行 94.6% / 分支 66.9%（2026-11-11）。
-# v0.5 V3 的分支目标是 75%：**尚未达成**（差 8pp），缺口集中在 mcp_server.c
-# 的方法级参数矩阵与错误传播链，需要系统化故障注入 + 参数组合矩阵才能补齐。
+# v0.6 N1 实施了表驱动组合矩阵（3141 自动生成用例）+ 容量扫描（4 种 MAX_MSG），
+# 分支从 67.05% 提到 68.06%。**75% 的目标仍未达成**，且 N1 当初「一次跨过 75%」
+# 的预测被证伪——剩下的缺口不是「组合不够」，而是**短路条件只走了一边**
+# （如 if (a && b) 的 b 永不为假），需要逐条件构造，成本远高于预期。
 # 阈值按「防回归」设定（略低于实测），不用未达成的目标值做门禁。
 # （见 docs/roadmap-v0.5.md V3），达标后再把阈值提上去。
 #
@@ -15,8 +17,8 @@
 # 其覆盖率反映的是 mock 的分派逻辑而非 core 的分支；单元测试才是分支覆盖主力。
 set -e
 
-LINE_MIN=${1:-94}
-BRANCH_MIN=${2:-66}
+LINE_MIN=${1:-95}
+BRANCH_MIN=${2:-68}
 OUT=build/cov
 mkdir -p "$OUT"
 
@@ -66,10 +68,28 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_l5_fuzz.c $CORE -o "$OUT/t_lf"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_fault.c $CORE -o "$OUT/t_fault"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_matrix.c $CORE -o "$OUT/t_matrix"
+# v0.6 N1：**受限资源配置**下跑同一套矩阵——强制走容量不足分支
+# （TOOBIG / 分页边界 / 缓冲耗尽），这些分支在默认大缓冲下永不执行。
+# 容量扫描：不同 MAX_MSG 会让「响应写到一半放不下」发生在**不同位置**，
+# 从而覆盖 body_* 里各条错误传播分支。单一大缓冲永远走不到这些分支。
+$CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=96 \
+    -DBT_MCP_CFG_PAGE_SIZE=1 -DBT_MCP_CFG_MAX_PENDING=1 \
+    tests/test_matrix.c $CORE -o "$OUT/t_matrix_s96"
+$CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=128 \
+    -DBT_MCP_CFG_PAGE_SIZE=1 -DBT_MCP_CFG_MAX_PENDING=1 \
+    tests/test_matrix.c $CORE -o "$OUT/t_matrix_s128"
+$CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=192 \
+    -DBT_MCP_CFG_PAGE_SIZE=2 \
+    tests/test_matrix.c $CORE -o "$OUT/t_matrix_s192"
+$CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=256 \
+    -DBT_MCP_CFG_PAGE_SIZE=3 \
+    tests/test_matrix.c $CORE -o "$OUT/t_matrix_s256"
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -77,7 +97,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

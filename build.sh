@@ -104,6 +104,21 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    -o build/test_l5_edges
 ./build/test_l5_edges
 
+echo "== 组合矩阵（表驱动，自动生成用例） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_matrix.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_matrix
+./build/test_matrix
+# 受限资源配置：强制走容量不足分支（默认大缓冲下永不执行）
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   -DBT_MCP_CFG_MAX_MSG=128 -DBT_MCP_CFG_PAGE_SIZE=1 \
+   -DBT_MCP_CFG_MAX_PENDING=1 \
+   tests/test_matrix.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_matrix_small
+./build/test_matrix_small
+
 echo "== 故障注入（错误传播链） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_fault.c core/src/frame.c core/src/session.c core/src/json.c \
