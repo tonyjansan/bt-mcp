@@ -144,6 +144,19 @@ IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ REA
   credit**（饱和到 255），不再依赖应用层手工调用 `session_ctrl(CREDIT)`。
   流通道或 `flow_ctrl=1` 的通道（CoC）直接放行，不记账。
 
+  v0.3 判例（信用必须「不会泄漏、不会丢帧」）：
+  - **CREDIT 载荷是「累计已消费条数」而非增量**：单个 CREDIT 帧丢失会被下一个
+    自动补偿（增量语义下丢一帧就永久少一格）；重复 CREDIT 也不重复加credit。
+    计数器是 u16，用回绕减法算增量，65535→0 处正确。
+  - 发送失败不扣信用（消息没上线就不该占窗口）；重传次数耗尽而放弃时**退还**
+    该消息占的信用，否则窗口单调泄漏、最终 `E_AGAIN` 永久死锁。
+  - 握手期（LINK_UP）同样回补/ACK——`initialize` 响应也占对端窗口，漏补会让
+    会话少一格。
+  - 计数基准（`consumed`/`peer_consumed`）随 `link_up` 重置，前提是**断链是
+    链路层双向事件**（BLE/RFCOMM 断开时两端都会收到 `link_down`）。若 port 在
+    单边重连时不调用 `link_down`，两边基准会错位——此时信用最多饱和到 255，
+    接收侧以 `E_NOMEM` 丢帧背压，不会崩溃或溢出，但属于 port 违例。
+
 ### 5.4 不可靠包通道的消息级可靠（v0.3 新增）
 
 `cap.reliable == 0`（GATT notify 即此类）时 L4 启用：

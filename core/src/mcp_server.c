@@ -260,6 +260,7 @@ int bt_mcp_call_cancelled(const bt_mcp_call_t *c)
 int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
 {
     if (!c || !c->srv || !c->has_progress) return BT_MCP_E_STATE;
+    if (c->cancelled) return BT_MCP_E_CANCEL;   /* 取消后不再发进度通知 */
     static char pbuf[192];
     memsink_t ms = { pbuf, 0, sizeof pbuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };

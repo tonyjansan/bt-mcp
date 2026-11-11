@@ -71,10 +71,18 @@ static int roundtrip(uint8_t kind, uint16_t mtu, const uint8_t *payload, uint32_
         size_t off = 0;
         rc = 0;
         while (off < out.len && !rc) {
+            if (off + 6 > out.len) { rc = 1; break; }
             uint16_t plen = (uint16_t)(out.buf[off + 4] | (out.buf[off + 5] << 8));
-            rc = bt_mcp_framer_feed(&g_fr, out.buf + off,
-                                    (uint16_t)(6 + plen), vec_sink, &back);
-            off += 6 + plen;
+            /* 片长 = 头 6 + 可选 FCS 2 + 载荷；off 必须严格前进（防死循环） */
+            size_t flen = (size_t)BT_MCP_HDR_LEN + plen
+#if BT_MCP_CFG_FCS16
+                        + 2
+#endif
+                        ;
+            if (flen == 0 || off + flen > out.len) { rc = 1; break; }
+            rc = bt_mcp_framer_feed(&g_fr, out.buf + off, (uint16_t)flen,
+                                    vec_sink, &back);
+            off += flen;
         }
     }
     /* 回环铁律：喂自己发的字节必须成功且逐字节还原 */
