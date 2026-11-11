@@ -1676,7 +1676,7 @@ impl Cs {
         self.b.extend_from_slice(mime.as_bytes());
         self.b.extend_from_slice(b"\",\"text\":\"");
         self.escape_inline(text);
-        self.b.extend_from_slice(b"\"}}}");
+        self.b.extend_from_slice(b"\"}}");
         self.items = self.items.wrapping_add(1);
     }
     fn end(&mut self) { self.close_text(); self.b.push(b']'); }

@@ -22,6 +22,14 @@ jobs:
       - name: Build + all suites (diff / HIL / unit / tiers)
         run: ./build.sh 200
 
+      - name: MCP spec conformance (structure)
+        run: |
+          cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+             tests/test_conformance.c core/src/frame.c core/src/session.c \
+             core/src/json.c core/src/writer.c core/src/mcp_server.c \
+             core/src/err.c core/src/trace.c -o build/test_conformance
+          ./build/test_conformance
+
       - name: Coverage gate (line/branch regression floor)
         run: ./tools/coverage.sh
 

@@ -65,6 +65,13 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
+echo "== MCP 规范结构符合性 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_conformance.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c \
+   -o build/test_conformance
+./build/test_conformance
+
 echo "== 重入与多实例不变量 =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_reentrancy.c core/src/frame.c core/src/session.c core/src/json.c \

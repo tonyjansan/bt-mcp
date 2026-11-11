@@ -301,7 +301,7 @@ int bt_mcp_w_content_resource(bt_mcp_writer_t *w, const char *uri,
                                (uint32_t)strlen(mime ? mime : "text/plain"));
     if (!rc) rc = bt_mcp_w_raw(c->w, "\",\"text\":\"", sizeof "\",\"text\":\"" - 1);
     if (!rc) rc = cs_escape_inline(c->w, text ? text : "", len);
-    if (!rc) rc = bt_mcp_w_raw(c->w, "\"}}}", 4);
+    if (!rc) rc = bt_mcp_w_raw(c->w, "\"}}", 3);   /* 关 resource 对象 + 关内容项 */
     if (rc) { c->err = 1; return rc; }
     c->items++;
     return BT_MCP_OK;
@@ -1179,7 +1179,8 @@ int bt_mcp_server_log(bt_mcp_server_t *sv, uint8_t level, const char *logger,
                                "\"notifications/message\",\"params\":{",
                           sizeof "{\"jsonrpc\":\"2.0\",\"method\":"
                                  "\"notifications/message\",\"params\":{" - 1);
-    if (!rc) rc = kv_raw_new(&w, "level", names[level], (uint32_t)strlen(names[level]));
+    if (!rc) rc = kv_str_slice(&w, "level", names[level],
+                               (uint32_t)strlen(names[level]));   /* 必须带引号 */
     if (!rc && logger) rc = kv_str_slice(&w, "logger", logger,
                                         (uint32_t)strlen(logger));
     esc_t es = { &w, 0 };
