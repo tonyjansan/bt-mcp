@@ -1164,29 +1164,48 @@ fn get_u32_value(params: &[u8], key: &[u8]) -> Option<u32> {
 
 /* ---------------- L5：MCP server ---------------- */
 
-struct McpTool { name: String, desc: String }
+struct McpTool {
+    name: String,
+    desc: String,
+    title: Option<String>,
+    output_schema: Option<String>,
+    annotations: u8,       /* 1=readOnly 2=destructive 4=idempotent 8=openWorld */
+    authz: u8,             /* 0=open 1=consent 2=restricted */
+    kind: u8,              /* 0=echo 1=allow 2=rich */
+}
 
 struct ResDef {
     name: &'static str,
     desc: &'static str,
+    title: Option<&'static str>,
     mime: &'static str,
     text: &'static [u8],
     page: usize,
+    size: u32,             /* 0 = 不输出 size */
+    sub: bool,             /* 是否可订阅 */
 }
 
 const RES_HR: &[u8] = b"hello resource";
 const RES_LOG: &[u8] = b"0123456789ABCDEFGHIJ";
 const RESOURCES: [ResDef; 2] = [
-    ResDef { name: "hr_window", desc: "heart rate window", mime: "text/plain",
-             text: RES_HR, page: 0 },
-    ResDef { name: "log", desc: "device log", mime: "text/plain",
-             text: RES_LOG, page: 8 },
+    ResDef { name: "hr_window", desc: "heart rate window",
+             title: Some("Heart rate"), mime: "text/plain",
+             text: RES_HR, page: 0, size: 0, sub: false },
+    ResDef { name: "log", desc: "device log", title: None, mime: "text/plain",
+             text: RES_LOG, page: 8, size: 20, sub: true },
+];
+
+struct PromptDef { name: &'static str, desc: &'static str, title: &'static str }
+const PROMPTS: [PromptDef; 1] = [
+    PromptDef { name: "greet", desc: "greeting prompt", title: "Greet" },
 ];
 
 struct McpSrv {
     sess: Sess,
     tools: Vec<McpTool>,
     initialized: bool,
+    log_level: u8,
+    subs: Vec<u16>,
 }
 
 fn json_escape(s: &[u8]) -> Vec<u8> {
@@ -1257,7 +1276,7 @@ fn respond_err(sv: &mut McpSrv, r: &Req, code: i32, msg: &str) -> i32 {
 }
 
 fn version_supported(v: &[u8]) -> bool {
-    ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+    ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
         .iter().any(|s| s.as_bytes() == v)
 }
 
@@ -1271,12 +1290,15 @@ fn body_initialize(sv: &McpSrv, r: &Req) -> Vec<u8> {
         Some(v) => b.extend_from_slice(&json_escape(&v)),
         None => b.extend_from_slice(b"\"2025-11-25\""),
     }
-    b.extend_from_slice(br#","capabilities":{"tools":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false}}"#);
+    b.extend_from_slice(br#","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true}"#);
+    /* prompts 恒存在（mock 固定注册 1 个） */
+    b.extend_from_slice(b",\"prompts\":{\"listChanged\":true}");
+    b.extend_from_slice(b",\"logging\":{}}");
     b.extend_from_slice(b",\"serverInfo\":{\"name\":");
     b.extend_from_slice(&json_escape(sv.sess_fw().0.as_bytes()));
     b.extend_from_slice(b",\"version\":");
     b.extend_from_slice(&json_escape(sv.sess_fw().1.as_bytes()));
-    b.extend_from_slice(b"},\"_meta\":{\"io.btmcp/ver\":\"0.3\",\"io.btmcp/chan\":{");
+    b.extend_from_slice(b"},\"_meta\":{\"io.btmcp/ver\":\"0.4\",\"io.btmcp/chan\":{");
     let cap = sv.sess_cap();
     b.extend_from_slice(format!("\"kind\":{},", cap.0).as_bytes());
     b.extend_from_slice(format!("\"mtu\":{},", cap.1).as_bytes());
@@ -1298,6 +1320,9 @@ impl McpSrv {
         let rel = if self.sess.reliable { 1 } else { 0 };
         let flow = if self.sess.flow_ctrl { 1 } else { 0 };
         (kind, mtu, self.sess.tx_window, rel, flow)
+    }
+    fn tool_by_name(&self, name: &[u8]) -> Option<&McpTool> {
+        self.tools.iter().find(|t| t.name.as_bytes() == name)
     }
 }
 
@@ -1337,10 +1362,32 @@ fn tools_list(sv: &McpSrv, r: &Req) -> Vec<u8> {
         if i != start { b.push(b','); }
         b.extend_from_slice(b"{\"name\":");
         b.extend_from_slice(&json_escape(t.name.as_bytes()));
+        if let Some(ti) = &t.title {
+            b.extend_from_slice(b",\"title\":");
+            b.extend_from_slice(&json_escape(ti.as_bytes()));
+        }
         b.extend_from_slice(b",\"description\":");
         b.extend_from_slice(&json_escape(t.desc.as_bytes()));
         b.extend_from_slice(b",\"inputSchema\":");
         b.extend_from_slice(b"{\"type\":\"object\",\"properties\":{}}");
+        if let Some(os) = &t.output_schema {
+            b.extend_from_slice(b",\"outputSchema\":");
+            b.extend_from_slice(os.as_bytes());
+        }
+        if t.annotations != 0 {
+            b.extend_from_slice(b",\"annotations\":{");
+            let mut first = true;
+            for (bit, name) in [(1u8, "readOnlyHint"), (2, "destructiveHint"),
+                                (4, "idempotentHint"), (8, "openWorldHint")] {
+                if t.annotations & bit == 0 { continue; }
+                if !first { b.push(b','); }
+                first = false;
+                b.push(b'"');
+                b.extend_from_slice(name.as_bytes());
+                b.extend_from_slice(b"\":true");
+            }
+            b.push(b'}');
+        }
         b.push(b'}');
     }
     b.extend_from_slice(b"]");
@@ -1381,12 +1428,20 @@ fn resources_list(sv: &McpSrv, r: &Req) -> Vec<u8> {
         if i != start { b.push(b','); }
         b.extend_from_slice(b"{\"name\":");
         b.extend_from_slice(&json_escape(rd.name.as_bytes()));
+        if let Some(ti) = rd.title {
+            b.extend_from_slice(b",\"title\":");
+            b.extend_from_slice(&json_escape(ti.as_bytes()));
+        }
         b.extend_from_slice(b",\"uri\":\"bt-mcp://dev/");
         b.extend_from_slice(rd.name.as_bytes());
         b.extend_from_slice(b"\",\"description\":");
         b.extend_from_slice(&json_escape(rd.desc.as_bytes()));
         b.extend_from_slice(b",\"mimeType\":");
         b.extend_from_slice(&json_escape(rd.mime.as_bytes()));
+        if rd.size != 0 {
+            b.extend_from_slice(b",\"size\":");
+            b.extend_from_slice(rd.size.to_string().as_bytes());
+        }
         b.push(b'}');
     }
     b.extend_from_slice(b"]");
@@ -1396,7 +1451,7 @@ fn resources_list(sv: &McpSrv, r: &Req) -> Vec<u8> {
 
 fn resources_read(r: &Req) -> Result<Vec<u8>, i32> {
     let Some(uri_raw) = get_str_value(&r.params, b"uri") else { return Err(E_PARSE); };
-    let uri = &uri_raw[1..uri_raw.len() - 1];       /* 去引号（未解码，与 C 同） */
+    let uri = &uri_raw[1..uri_raw.len() - 1];
     let Some((name, mut cursor)) = parse_resource_uri(uri) else { return Err(E_PARSE); };
     if cursor == 0 {
         if let Some(cur) = get_str_value(&r.params, b"cursor") {
@@ -1404,7 +1459,7 @@ fn resources_read(r: &Req) -> Result<Vec<u8>, i32> {
         }
     }
     let Some(rd) = RESOURCES.iter().find(|d| d.name.as_bytes() == &name[..]) else {
-        return Err(-2);       /* C：E_ARGS → 上层转 -32002 */
+        return Err(-2);
     };
     let (text, next) = if cursor as usize >= rd.text.len() {
         (&b""[..], u32::MAX)
@@ -1430,28 +1485,148 @@ fn resources_read(r: &Req) -> Result<Vec<u8>, i32> {
     Ok(b)
 }
 
-fn tool_result_body(text: &[u8], is_error: bool) -> Vec<u8> {
+fn prompts_list(r: &Req) -> Vec<u8> {
+    let total = PROMPTS.len() as u16;
+    let (start, end) = page_of(r, total);
     let mut b = Vec::new();
-    b.extend_from_slice(b"\"content\":[{\"type\":\"text\",\"text\":\"");
-    /* 前后引号已在前缀/后缀里：此处只写转义内容，不再额外包引号 */
-    b.extend_from_slice(&json_escape_inner(text));
-    b.extend_from_slice(b"\"}],\"isError\":");
-    b.extend_from_slice(if is_error { b"true" } else { b"false" });
+    b.extend_from_slice(b"\"prompts\":[");
+    for (i, p) in PROMPTS.iter().enumerate().take(end).skip(start) {
+        if i != start { b.push(b','); }
+        b.extend_from_slice(b"{\"name\":");
+        b.extend_from_slice(&json_escape(p.name.as_bytes()));
+        b.extend_from_slice(b",\"title\":");
+        b.extend_from_slice(&json_escape(p.title.as_bytes()));
+        b.extend_from_slice(b",\"description\":");
+        b.extend_from_slice(&json_escape(p.desc.as_bytes()));
+        b.push(b'}');
+    }
+    b.extend_from_slice(b"]");
+    put_next_cursor(&mut b, end, total);
     b
 }
 
-/* 与 C esc_put 等价：只转义，不加外层引号 */
+/* prompts/get：与 mock 的 prompt_greet 逐字节一致 */
+fn prompts_get(r: &Req) -> Result<Vec<u8>, i32> {
+    let Some(name_raw) = get_str_value(&r.params, b"name") else { return Err(E_PARSE); };
+    let name = &name_raw[1..name_raw.len() - 1];
+    if !PROMPTS.iter().any(|p| p.name.as_bytes() == name) { return Err(-2); }
+    let mut b = Vec::new();
+    b.extend_from_slice(b"\"description\":");
+    b.extend_from_slice(&json_escape(b"A friendly greeting"));
+    b.extend_from_slice(b",\"messages\":[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"hello\"}}]");
+    Ok(b)
+}
+
+/* ---- 内容项拼装（对应 C 的 cs_t） ---- */
+struct Cs { b: Vec<u8>, items: u8, text_open: bool, err: bool }
+
+impl Cs {
+    fn new() -> Self { Cs { b: Vec::new(), items: 0, text_open: false, err: false } }
+    fn close_text(&mut self) {
+        if self.text_open { self.text_open = false; self.b.extend_from_slice(b"\"}"); }
+    }
+    fn open_text(&mut self) {
+        if self.text_open { return; }
+        if self.items != 0 { self.b.push(b','); }
+        self.b.extend_from_slice(b"{\"type\":\"text\",\"text\":\"");
+        self.text_open = true;
+        self.items = self.items.wrapping_add(1);
+    }
+    fn put(&mut self, d: &[u8]) {
+        if self.err { return; }
+        for &ch in d {
+            if !self.text_open { self.open_text(); }
+            match ch {
+                b'"' => self.b.extend_from_slice(b"\\\""),
+                b'\\' => self.b.extend_from_slice(b"\\\\"),
+                b'\n' => self.b.extend_from_slice(b"\\n"),
+                b'\r' => self.b.extend_from_slice(b"\\r"),
+                b'\t' => self.b.extend_from_slice(b"\\t"),
+                _ if ch < 0x20 => self.b.extend_from_slice(
+                    format!("\\u00{:02x}", ch).as_bytes()),
+                _ => self.b.push(ch),
+            }
+        }
+    }
+    fn item_prefix(&mut self) {
+        self.close_text();
+        if self.items != 0 { self.b.push(b','); }
+    }
+    fn content_text(&mut self, t: &[u8]) {
+        self.close_text();
+        self.open_text();
+        self.put(t);
+    }
+    fn content_opaque(&mut self, ty: &str, data: &[u8], mime: &str) {
+        self.close_text();
+        self.item_prefix();
+        self.b.extend_from_slice(b"{\"type\":\"");
+        self.b.extend_from_slice(ty.as_bytes());
+        self.b.extend_from_slice(b"\",\"data\":\"");
+        self.b.extend_from_slice(data);
+        self.b.extend_from_slice(b"\",\"mimeType\":\"");
+        self.b.extend_from_slice(mime.as_bytes());
+        self.b.extend_from_slice(b"\"}");
+        self.items = self.items.wrapping_add(1);
+    }
+    fn content_resource(&mut self, uri: &str, mime: &str, text: &[u8]) {
+        self.close_text();
+        self.item_prefix();
+        self.b.extend_from_slice(b"{\"type\":\"resource\",\"resource\":{\"uri\":\"");
+        self.b.extend_from_slice(uri.as_bytes());
+        self.b.extend_from_slice(b"\",\"mimeType\":\"");
+        self.b.extend_from_slice(mime.as_bytes());
+        self.b.extend_from_slice(b"\",\"text\":\"");
+        self.put(text);
+        self.b.extend_from_slice(b"\"}}}");
+        self.items = self.items.wrapping_add(1);
+    }
+    fn end(&mut self) { self.close_text(); self.b.push(b']'); }
+}
+
+fn tool_result_body(text: &[u8], is_error: bool) -> Vec<u8> {
+    let mut c = Cs::new();
+    c.b.extend_from_slice(b"\"content\":[");
+    c.put(text);
+    c.end();
+    c.b.extend_from_slice(b",\"isError\":");
+    c.b.extend_from_slice(if is_error { b"true" } else { b"false" });
+    c.b
+}
+
+fn tool_rich_body() -> Vec<u8> {
+    let mut c = Cs::new();
+    c.b.extend_from_slice(b"\"content\":[");
+    c.put(b"plain");
+    c.content_text(b"second");
+    c.content_opaque("image", b"aGVsbG8=", "image/png");
+    c.content_opaque("audio", b"AAEC", "audio/wav");
+    c.content_resource("bt-mcp://dev/log", "text/plain", b"res");
+    c.end();
+    c.b.extend_from_slice(b",\"isError\":false");
+    c.b
+}
+
 fn json_escape_inner(s: &[u8]) -> Vec<u8> {
     let full = json_escape(s);
     full[1..full.len() - 1].to_vec()
 }
 
-/* mock tool_echo：解转义后原文（截断 191B），失败 → E_PARSE */
 fn tool_echo(params_raw: &[u8]) -> Result<Vec<u8>, ()> {
     let Some(v) = get_str_value(params_raw, b"text") else { return Err(()); };
     let mut t = decode_str(&v, 0, v.len());
     t.truncate(MAX_MSG - 1);
     Ok(t)
+}
+
+/* mock 的 consent_cb：arguments 里出现 "allow":true 才放行 */
+fn consent_allows(params: &[u8]) -> bool {
+    let args = match find_key(params, b"arguments") {
+        Some((v0, v1)) => &params[v0..v1],
+        None => return false,
+    };
+    let needle = b"\"allow\":true";
+    args.windows(needle.len()).any(|w| w == needle)
 }
 
 fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
@@ -1486,16 +1661,28 @@ fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
             return respond_err(sv, &r, -32602, "Invalid params");
         };
         let name_val = name_raw[1..name_raw.len() - 1].to_vec();
-        let found = sv.tools.iter().any(|t| t.name.as_bytes() == &name_val[..]);
-        if !found { return respond_err(sv, &r, -32602, "Invalid params"); }
-        /* arguments 嫁接（无 arguments 则透传 params） */
-        let args: Vec<u8> = match find_key(&r.params, b"arguments") {
-            Some((v0, v1)) if r.params[v0] == b'{' => r.params[v0..v1].to_vec(),
-            _ => r.params.clone(),
+        let Some(tool) = sv.tool_by_name(&name_val) else {
+            return respond_err(sv, &r, -32602, "Invalid params");
         };
-        let body = match tool_echo(&args) {
-            Ok(text) => tool_result_body(&text, false),
-            Err(()) => tool_result_body(b"tool error", true),
+        let authz = tool.authz;
+        let kind = tool.kind;
+        if authz == 2 { return respond_err(sv, &r, -32003, "Permission denied"); }
+        if authz == 1 && !consent_allows(&r.params) {
+            return respond_err(sv, &r, -32003, "Permission denied");
+        }
+        let body = if kind == 2 {
+            tool_rich_body()
+        } else if kind == 1 {
+            tool_result_body(b"allowed", false)
+        } else {
+            let args: Vec<u8> = match find_key(&r.params, b"arguments") {
+                Some((v0, v1)) if r.params[v0] == b'{' => r.params[v0..v1].to_vec(),
+                _ => r.params.clone(),
+            };
+            match tool_echo(&args) {
+                Ok(text) => tool_result_body(&text, false),
+                Err(()) => tool_result_body(b"tool error", true),
+            }
         };
         let rc = respond(sv, &r, &body);
         if rc == E_TOOBIG {
@@ -1513,6 +1700,53 @@ fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
             Err(-2) => return respond_err(sv, &r, -32002, "Resource not found"),
             Err(_) => return respond_err(sv, &r, -32602, "Invalid params"),
         }
+    }
+    if r.method == b"resources/subscribe" || r.method == b"resources/unsubscribe" {
+        let sub = r.method == b"resources/subscribe";
+        let Some(uri_raw) = get_str_value(&r.params, b"uri") else {
+            return respond_err(sv, &r, -32602, "Invalid params");
+        };
+        let uri = &uri_raw[1..uri_raw.len() - 1];
+        let Some((name, _)) = parse_resource_uri(uri) else {
+            return respond_err(sv, &r, -32602, "Invalid params");
+        };
+        let Some(idx) = RESOURCES.iter().position(|d| d.name.as_bytes() == &name[..])
+            else { return respond_err(sv, &r, -32602, "Invalid params"); };
+        if !RESOURCES[idx].sub { return respond_err(sv, &r, -32602, "Invalid params"); }
+        let have = sv.subs.iter().position(|&x| x as usize == idx);
+        if sub {
+            if have.is_none() {
+                if sv.subs.len() >= 8 { return respond_err(sv, &r, -32603, "Subscribe failed"); }
+                sv.subs.push(idx as u16);
+            }
+        } else if let Some(h) = have {
+            sv.subs.remove(h);
+        }
+        return respond(sv, &r, b"");
+    }
+    if r.method == b"prompts/list" {
+        let body = prompts_list(&r);
+        return respond(sv, &r, &body);
+    }
+    if r.method == b"prompts/get" {
+        match prompts_get(&r) {
+            Ok(body) => return respond(sv, &r, &body),
+            Err(-2) => return respond_err(sv, &r, -32602, "Prompt not found"),
+            Err(_) => return respond_err(sv, &r, -32602, "Invalid params"),
+        }
+    }
+    if r.method == b"logging/setLevel" {
+        let Some(lv) = get_str_value(&r.params, b"level") else {
+            return respond_err(sv, &r, -32602, "Invalid params");
+        };
+        let name = &lv[1..lv.len() - 1];
+        let names: [&[u8]; 8] = [b"debug", b"info", b"notice", b"warning",
+                                 b"error", b"critical", b"alert", b"emergency"];
+        let Some(pos) = names.iter().position(|n| *n == name) else {
+            return respond_err(sv, &r, -32602, "Invalid params");
+        };
+        sv.log_level = pos as u8;
+        return respond(sv, &r, b"");
     }
     if r.has_id {
         return respond_err(sv, &r, -32601, "Method not found");
@@ -1536,7 +1770,28 @@ fn load_tools(input: &[u8], off: &mut usize) -> Result<(Vec<McpTool>, usize), i3
         if dl > 127 || *off + dl > input.len() { return Err(2); }
         let desc = input[*off..*off + dl].to_vec(); *off += dl;
         tools.push(McpTool { name: String::from_utf8_lossy(&name).into_owned(),
-                             desc: String::from_utf8_lossy(&desc).into_owned() });
+                             desc: String::from_utf8_lossy(&desc).into_owned(),
+                             title: None, output_schema: None,
+                             annotations: 0, authz: 0, kind: 0 });
+    }
+    /* 与 mock 一致：追加 consent_tool / restricted_tool / rich_tool */
+    let n = tools.len();
+    if n + 2 <= 16 {
+        tools.push(McpTool { name: "consent_tool".to_string(),
+            desc: "needs consent".to_string(),
+            title: Some("Consent tool".to_string()),
+            output_schema: Some("{\"type\":\"object\"}".to_string()),
+            annotations: 1 | 4, authz: 1, kind: 1 });
+        tools.push(McpTool { name: "restricted_tool".to_string(),
+            desc: "always denied".to_string(),
+            title: None, output_schema: None,
+            annotations: 2, authz: 2, kind: 1 });
+    }
+    if tools.len() + 1 <= 16 {
+        tools.push(McpTool { name: "rich_tool".to_string(),
+            desc: "multi content".to_string(),
+            title: None, output_schema: None,
+            annotations: 0, authz: 0, kind: 2 });
     }
     Ok((tools, *off))
 }
@@ -1554,7 +1809,8 @@ fn run_mcp(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
     }
     let mut s = Sess::new(packet, mtu);
     s.link_up(0);
-    let mut srv = McpSrv { sess: s, tools, initialized: false };
+    let mut srv = McpSrv { sess: s, tools, initialized: false,
+                           log_level: 1, subs: Vec::new() };
 
     while off < input.len() {
         let op = input[off]; off += 1;
@@ -1676,7 +1932,8 @@ fn run_e2e(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
     }
     let mut e = E2e {
         cl: Sess::new(packet, mtu),
-        sv: McpSrv { sess: Sess::new(packet, mtu), tools, initialized: false },
+        sv: McpSrv { sess: Sess::new(packet, mtu), tools, initialized: false,
+                     log_level: 1, subs: Vec::new() },
         c2s: Vec::new(),
         s2c: Vec::new(),
     };

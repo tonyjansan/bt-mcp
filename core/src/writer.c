@@ -101,6 +101,18 @@ int bt_mcp_w_end(bt_mcp_writer_t *w)
     return put_lit(w, "}}");
 }
 
+int bt_mcp_w_key(bt_mcp_writer_t *w, const char *key)
+{
+    if (!w || !key) return BT_MCP_E_ARGS;
+    int rc = BT_MCP_OK;
+    if (w->need_comma) rc = bt_mcp_w_raw(w, ",", 1);
+    if (!rc) rc = bt_mcp_w_raw(w, "\"", 1);
+    if (!rc) rc = bt_mcp_w_raw(w, key, (uint32_t)strlen(key));
+    if (!rc) rc = bt_mcp_w_raw(w, "\":", 2);
+    w->need_comma = 0;
+    return rc;
+}
+
 int bt_mcp_w_kv_str(bt_mcp_writer_t *w, const char *key, const char *val)
 {
     int rc = w->need_comma ? put_lit(w, ",") : 0;

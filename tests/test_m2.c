@@ -107,15 +107,20 @@ static int res_read(void *user, uint32_t cursor, const char **text,
 }
 
 static const bt_mcp_tool_def_t TOOLS[] = {
-    { "echo", "Echo back the text parameter",
-      "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}",
-      BT_MCP_AUTHZ_OPEN, tool_echo, NULL },
-    { "slow", "Async tool", "{\"type\":\"object\",\"properties\":{}}",
-      BT_MCP_AUTHZ_OPEN, tool_async, NULL },
+    { .name = "echo", .desc = "Echo back the text parameter",
+      .title = "Echo",
+      .input_schema_json =
+          "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}",
+      .annotations = BT_MCP_TOOL_READONLY,
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_echo },
+    { .name = "slow", .desc = "Async tool",
+      .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_async },
 };
 
 static const bt_mcp_resource_def_t RES[] = {
-    { "log", "device log", "text/plain", BT_MCP_AUTHZ_OPEN, res_read, NULL },
+    { .name = "log", .desc = "device log", .mime_type = "text/plain",
+      .authz = BT_MCP_AUTHZ_OPEN, .read = res_read },
 };
 
 /* 简化测试拓扑：server 侧 framer+session+server，客户端用 encode 手工造帧 */
@@ -150,7 +155,8 @@ int main(void)
     bt_mcp_session_bind(&g_se_s, &g_fr_s, vec_put, &g_wire_s2c);
     bt_mcp_session_link_up(&g_se_s, 0);
 
-    bt_mcp_server_cfg_t svcfg = { TOOLS, 2, RES, 1 };
+    bt_mcp_server_cfg_t svcfg = { .tools = TOOLS, .tools_count = 2,
+                                   .resources = RES, .resources_count = 1 };
     bt_mcp_server_init(&g_sv, &g_se_s, &svcfg, "test-device", "0.3");
 
     reset_wires();

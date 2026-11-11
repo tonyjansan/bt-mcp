@@ -111,6 +111,15 @@
 #  error "BT_MCP_CFG_MAX_FRAG too small for BT_MCP_CFG_MAX_MSG at 255B chunks"
 #endif
 
+#ifndef BT_MCP_CFG_MAX_SUBS
+#define BT_MCP_CFG_MAX_SUBS      8      /* 同时订阅的资源数上限 */
+#endif
+#ifndef BT_MCP_CFG_MAX_S2C_REQ
+#define BT_MCP_CFG_MAX_S2C_REQ   2      /* server→client 在途请求上限 */
+#endif
+#ifndef BT_MCP_CFG_S2C_TOUT_MS
+#define BT_MCP_CFG_S2C_TOUT_MS   30000  /* S→C 请求超时 */
+#endif
 #ifndef BT_MCP_CFG_TRACE
 #define BT_MCP_CFG_TRACE         0      /* 1 = 编译进追踪钩子（debug 构建用） */
 #endif

@@ -147,12 +147,80 @@ static const char RES_LOG[] = "0123456789ABCDEFGHIJ";
 static const res_src_t RES_HR_SRC  = { RES_HR,  sizeof RES_HR  - 1, 0 };
 static const res_src_t RES_LOG_SRC = { RES_LOG, sizeof RES_LOG - 1, 8 };
 
+/* 订阅回调：只记录，用于让 notifications/resources/updated 可被触发 */
+static int g_sub_log;
+static int res_sub(void *user, int subscribe)
+{
+    (void)user;
+    g_sub_log = subscribe;
+    return 0;
+}
+
 static const bt_mcp_resource_def_t MOCK_RES[] = {
-    { "hr_window", "heart rate window", "text/plain",
-      BT_MCP_AUTHZ_OPEN, res_read, (void *)&RES_HR_SRC },
-    { "log", "device log", "text/plain",
-      BT_MCP_AUTHZ_OPEN, res_read, (void *)&RES_LOG_SRC },
+    { .name = "hr_window", .desc = "heart rate window", .title = "Heart rate",
+      .mime_type = "text/plain", .authz = BT_MCP_AUTHZ_OPEN,
+      .read = res_read, .user = (void *)&RES_HR_SRC },
+    { .name = "log", .desc = "device log", .mime_type = "text/plain",
+      .size = (uint32_t)(sizeof RES_LOG - 1),   /* 20B，见 RES_LOG */
+      .authz = BT_MCP_AUTHZ_OPEN, .read = res_read, .sub = res_sub,
+      .user = (void *)&RES_LOG_SRC },
 };
+
+/* proposals/授权测试工具：consent 放行规则 = arguments.allow 为 true */
+static int consent_cb(void *user, const char *tool_name,
+                      const bt_mcp_json_req_t *req)
+{
+    (void)user; (void)tool_name;
+    const char *v; uint32_t vl;
+    if (bt_mcp_json_get_raw(req, "arguments", &v, &vl)) return -1;
+    /* 在 arguments 片段里找 allow:true（简化判定，仅 mock 用） */
+    for (uint32_t i = 0; i + 12 <= vl; i++)
+        if (!memcmp(v + i, "\"allow\":true", 12)) return 0;
+    return -1;
+}
+
+static int tool_allow(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
+                      bt_mcp_call_t *c, void *user)
+{
+    (void)r; (void)c; (void)user;
+    return bt_mcp_w_content_text(w, "allowed", 7);
+}
+
+static int g_rich_tool_present;
+
+/* 富内容工具：text + image + audio + resource 四个内容项 */
+static int tool_rich(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
+                     bt_mcp_call_t *c, void *user)
+{
+    (void)r; (void)c; (void)user;
+    int rc = bt_mcp_w_raw(w, "plain", 5);            /* 裸写 → 文本项 */
+    if (!rc) rc = bt_mcp_w_content_text(w, "second", 6);
+    if (!rc) rc = bt_mcp_w_content_image(w, "aGVsbG8=", 8, "image/png");
+    if (!rc) rc = bt_mcp_w_content_audio(w, "AAEC", 4, "audio/wav");
+    if (!rc) rc = bt_mcp_w_content_resource(w, "bt-mcp://dev/log", "text/plain",
+                                            "res", 3);
+    return rc;
+}
+
+/* prompts：一个静态 prompt */
+static int prompt_greet(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *user)
+{
+    (void)r; (void)user;
+    int rc = bt_mcp_w_key(w, "description");
+    if (!rc) rc = bt_mcp_w_str_lit(w, "A friendly greeting");
+    w->need_comma = 1;
+    if (!rc) rc = bt_mcp_w_key(w, "messages");
+    if (!rc) rc = bt_mcp_w_raw(w, "[{\"role\":\"user\",\"content\":"
+                                  "{\"type\":\"text\",\"text\":\"hello\"}}]", 63);
+    w->need_comma = 1;
+    return rc;
+}
+
+static const bt_mcp_prompt_def_t MOCK_PROMPTS[] = {
+    { .name = "greet", .desc = "greeting prompt", .title = "Greet",
+      .get = prompt_greet },
+};
+#define MOCK_PROMPT_COUNT ((uint16_t)(sizeof MOCK_PROMPTS / sizeof MOCK_PROMPTS[0]))
 #define MOCK_RES_COUNT ((uint16_t)(sizeof MOCK_RES / sizeof MOCK_RES[0]))
 
 int main(int argc, char **argv)
@@ -421,6 +489,46 @@ static int run_mcp(const uint8_t *in, size_t in_len)
         tools[i].fn = tool_echo;
         tools[i].user = NULL;
     }
+    /* 追加固定工具：授权路径可被差分覆盖（名字固定，Host 可见） */
+    if (tools_count + 2 <= 16) {
+        bt_mcp_tool_def_t *ct = &tools[tools_count++];
+        ct->name = "consent_tool";
+        ct->desc = "needs consent";
+        ct->title = "Consent tool";
+        ct->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+        ct->output_schema_json = "{\"type\":\"object\"}";
+        ct->annotations = BT_MCP_TOOL_READONLY | BT_MCP_TOOL_IDEMPOTENT;
+        ct->authz = BT_MCP_AUTHZ_CONSENT;
+        ct->fn = tool_allow;
+        ct->user = NULL;
+
+        bt_mcp_tool_def_t *rt = &tools[tools_count++];
+        rt->name = "restricted_tool";
+        rt->desc = "always denied";
+        rt->title = NULL;
+        rt->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+        rt->output_schema_json = NULL;
+        rt->annotations = BT_MCP_TOOL_DESTRUCTIVE;
+        rt->authz = BT_MCP_AUTHZ_RESTRICTED;
+        rt->fn = tool_allow;
+        rt->user = NULL;
+    }
+    if (!g_rich_tool_present) {
+        /* 追加一个富内容工具：验证 text/image/audio/resource 混排 */
+        if (tools_count + 1 <= 16) {
+            bt_mcp_tool_def_t *rt = &tools[tools_count++];
+            rt->name = "rich_tool";
+            rt->desc = "multi content";
+            rt->title = NULL;
+            rt->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+            rt->output_schema_json = NULL;
+            rt->annotations = 0;
+            rt->authz = BT_MCP_AUTHZ_OPEN;
+            rt->fn = tool_rich;
+            rt->user = NULL;
+        }
+        g_rich_tool_present = 1;
+    }
 
     static bt_mcp_framer_t fr;
     static bt_mcp_session_t se;
@@ -440,7 +548,10 @@ static int run_mcp(const uint8_t *in, size_t in_len)
     bt_mcp_session_link_up(&se, 0);   /* server 端：LINK_UP 等 initialize */
     bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count,
                                   .resources = MOCK_RES,
-                                  .resources_count = MOCK_RES_COUNT };
+                                  .resources_count = MOCK_RES_COUNT,
+                                  .prompts = MOCK_PROMPTS,
+                                  .prompts_count = MOCK_PROMPT_COUNT,
+                                  .consent = consent_cb };
     if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.3")) return 2;
 
     int32_t rc = 0;
@@ -610,6 +721,46 @@ static int run_e2e(const uint8_t *in, size_t in_len)
         tools[i].fn = tool_echo;
         tools[i].user = NULL;
     }
+    /* 追加固定工具：授权路径可被差分覆盖（名字固定，Host 可见） */
+    if (tools_count + 2 <= 16) {
+        bt_mcp_tool_def_t *ct = &tools[tools_count++];
+        ct->name = "consent_tool";
+        ct->desc = "needs consent";
+        ct->title = "Consent tool";
+        ct->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+        ct->output_schema_json = "{\"type\":\"object\"}";
+        ct->annotations = BT_MCP_TOOL_READONLY | BT_MCP_TOOL_IDEMPOTENT;
+        ct->authz = BT_MCP_AUTHZ_CONSENT;
+        ct->fn = tool_allow;
+        ct->user = NULL;
+
+        bt_mcp_tool_def_t *rt = &tools[tools_count++];
+        rt->name = "restricted_tool";
+        rt->desc = "always denied";
+        rt->title = NULL;
+        rt->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+        rt->output_schema_json = NULL;
+        rt->annotations = BT_MCP_TOOL_DESTRUCTIVE;
+        rt->authz = BT_MCP_AUTHZ_RESTRICTED;
+        rt->fn = tool_allow;
+        rt->user = NULL;
+    }
+    if (!g_rich_tool_present) {
+        /* 追加一个富内容工具：验证 text/image/audio/resource 混排 */
+        if (tools_count + 1 <= 16) {
+            bt_mcp_tool_def_t *rt = &tools[tools_count++];
+            rt->name = "rich_tool";
+            rt->desc = "multi content";
+            rt->title = NULL;
+            rt->input_schema_json = "{\"type\":\"object\",\"properties\":{}}";
+            rt->output_schema_json = NULL;
+            rt->annotations = 0;
+            rt->authz = BT_MCP_AUTHZ_OPEN;
+            rt->fn = tool_rich;
+            rt->user = NULL;
+        }
+        g_rich_tool_present = 1;
+    }
 
     /* client 侧（L4 client 角色）+ server 侧（L4 server 角色 + L5） */
     static bt_mcp_framer_t cfr, sfr;
@@ -635,7 +786,10 @@ static int run_e2e(const uint8_t *in, size_t in_len)
     bt_mcp_session_bind(&ss, &sfr, vec_emit, &e_s2c);
     bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count,
                                   .resources = MOCK_RES,
-                                  .resources_count = MOCK_RES_COUNT };
+                                  .resources_count = MOCK_RES_COUNT,
+                                  .prompts = MOCK_PROMPTS,
+                                  .prompts_count = MOCK_PROMPT_COUNT,
+                                  .consent = consent_cb };
     if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.3")) return 2;
 
     g_pump_sv = &sv;

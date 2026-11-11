@@ -69,11 +69,14 @@ static int res_read(void *user, uint32_t cursor, const char **text,
 }
 
 static const bt_mcp_tool_def_t TOOLS[] = {
-    { "echo", "Echo", "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}",
-      BT_MCP_AUTHZ_OPEN, tool_echo, NULL },
+    { .name = "echo", .desc = "Echo",
+      .input_schema_json =
+          "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}",
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_echo },
 };
 static const bt_mcp_resource_def_t RES[] = {
-    { "greeting", "greeting text", "text/plain", BT_MCP_AUTHZ_OPEN, res_read, NULL },
+    { .name = "greeting", .desc = "greeting text", .mime_type = "text/plain",
+      .authz = BT_MCP_AUTHZ_OPEN, .read = res_read },
 };
 
 /* 交叉泵：客户端 wire → server，server wire → client */
@@ -180,7 +183,8 @@ int main(void)
     bt_mcp_session_bind(&se_c, &fr_c, c_put, &c2s);
     bt_mcp_session_bind(&se_s, &fr_s, c_put, &s2c);
 
-    bt_mcp_server_cfg_t svcfg = { TOOLS, 1, RES, 1 };
+    bt_mcp_server_cfg_t svcfg = { .tools = TOOLS, .tools_count = 1,
+                                   .resources = RES, .resources_count = 1 };
     bt_mcp_server_init(&sv, &se_s, &svcfg, "device", "0.3");
     bt_mcp_client_init(&cl, &se_c, on_event, NULL);
 

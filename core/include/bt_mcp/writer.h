@@ -30,6 +30,9 @@ int bt_mcp_w_begin_error_id  (bt_mcp_writer_t *w, int64_t id,
                               int code, const char *message);
 int bt_mcp_w_end          (bt_mcp_writer_t *w);
 /* 对象内键值（自动逗号）：str=字符串值，raw=内嵌 JSON */
+/* 开一个键：按 need_comma 自动补逗号，写出 ,"key": 并把 need_comma 置 0。
+ * 供需要自己拼数组/嵌套对象的调用方（如 prompt 实现）使用。 */
+int bt_mcp_w_key    (bt_mcp_writer_t *w, const char *key);
 int bt_mcp_w_kv_str (bt_mcp_writer_t *w, const char *key, const char *val);
 int bt_mcp_w_kv_raw (bt_mcp_writer_t *w, const char *key,
                       const char *raw, uint32_t len);
