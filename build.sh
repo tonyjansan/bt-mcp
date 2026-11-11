@@ -43,6 +43,11 @@ echo "== FCS16 往返（通道无链路校验时才开） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    tests/test_fcs16.c core/src/frame.c -o build/test_fcs16
 ./build/test_fcs16
+# 同一批核心单测在 FCS16 模式下再跑一遍（帧长差 2B，硬编码偏移会暴露）
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
+   tests/test_m2.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c -o build/test_m2_fcs16
+./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
 echo "== Bridge 客户端端到端（client L5 ↔ server L5） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \

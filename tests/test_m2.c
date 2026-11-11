@@ -261,7 +261,13 @@ int main(void)
         CHECK(rc == 0, "rx delivered");
         /* 消费一条消息 → 自动回补对端 1 credit（CREDIT 帧），并回 ACK */
         CHECK(w.len > before, "consume emits CREDIT/ACK frames");
-        CHECK(w.buf[before + BT_MCP_HDR_LEN] == BT_MCP_CTRL_CREDIT,
+        /* 帧载荷起始 = 头(6) + 可选 FCS(2)：FCS16=1 时必须跳过校验字段 */
+        const size_t pl_off = (size_t)BT_MCP_HDR_LEN
+#if BT_MCP_CFG_FCS16
+                            + 2
+#endif
+                            ;
+        CHECK(w.buf[before + pl_off] == BT_MCP_CTRL_CREDIT,
               "first emitted control frame is CREDIT");
         /* 饱和：手动灌满 + 回补不溢出 */
         uint8_t cr[3] = { BT_MCP_CTRL_CREDIT, 0xFF, 0x00 };
