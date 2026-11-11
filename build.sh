@@ -65,6 +65,9 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
+echo "== RAM 预算门禁（12 组合） =="
+python3 tools/ram_baseline.py
+
 echo "== 结构化 fuzz（L5，语法感知） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    fuzz/fuzz_l5.c core/src/frame.c core/src/session.c core/src/json.c \

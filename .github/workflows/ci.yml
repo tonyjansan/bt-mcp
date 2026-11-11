@@ -22,6 +22,9 @@ jobs:
       - name: Build + all suites (diff / HIL / unit / tiers)
         run: ./build.sh 200
 
+      - name: RAM budget gate
+        run: python3 tools/ram_baseline.py
+
       - name: Structure-aware L5 fuzz
         run: |
           cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \

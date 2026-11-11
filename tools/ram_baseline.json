@@ -1,0 +1,134 @@
+{
+  "COMPACT/default": {
+    "client": 2120,
+    "framer": 3152,
+    "max_msg": 1024,
+    "max_reasm": 2,
+    "server": 6624,
+    "session": 808,
+    "shared": 0,
+    "total_core": 10584,
+    "tx_slots": 2
+  },
+  "COMPACT/fcs16": {
+    "client": 2120,
+    "framer": 3152,
+    "max_msg": 1024,
+    "max_reasm": 2,
+    "server": 6624,
+    "session": 808,
+    "shared": 0,
+    "total_core": 10584,
+    "tx_slots": 2
+  },
+  "COMPACT/shared_reasm": {
+    "client": 2120,
+    "framer": 2112,
+    "max_msg": 1024,
+    "max_reasm": 1,
+    "server": 6624,
+    "session": 808,
+    "shared": 1,
+    "total_core": 9544,
+    "tx_slots": 2
+  },
+  "COMPACT/trace": {
+    "client": 2120,
+    "framer": 3152,
+    "max_msg": 1024,
+    "max_reasm": 2,
+    "server": 6624,
+    "session": 808,
+    "shared": 0,
+    "total_core": 10584,
+    "tx_slots": 2
+  },
+  "FULL/default": {
+    "client": 16456,
+    "framer": 41072,
+    "max_msg": 8192,
+    "max_reasm": 4,
+    "server": 14048,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 56440,
+    "tx_slots": 2
+  },
+  "FULL/fcs16": {
+    "client": 16456,
+    "framer": 41072,
+    "max_msg": 8192,
+    "max_reasm": 4,
+    "server": 14048,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 56440,
+    "tx_slots": 2
+  },
+  "FULL/shared_reasm": {
+    "client": 16456,
+    "framer": 16448,
+    "max_msg": 8192,
+    "max_reasm": 1,
+    "server": 14048,
+    "session": 1320,
+    "shared": 1,
+    "total_core": 31816,
+    "tx_slots": 2
+  },
+  "FULL/trace": {
+    "client": 16456,
+    "framer": 41072,
+    "max_msg": 8192,
+    "max_reasm": 4,
+    "server": 14048,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 56440,
+    "tx_slots": 2
+  },
+  "STANDARD/default": {
+    "client": 4168,
+    "framer": 10352,
+    "max_msg": 2048,
+    "max_reasm": 4,
+    "server": 7776,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 19448,
+    "tx_slots": 2
+  },
+  "STANDARD/fcs16": {
+    "client": 4168,
+    "framer": 10352,
+    "max_msg": 2048,
+    "max_reasm": 4,
+    "server": 7776,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 19448,
+    "tx_slots": 2
+  },
+  "STANDARD/shared_reasm": {
+    "client": 4168,
+    "framer": 4160,
+    "max_msg": 2048,
+    "max_reasm": 1,
+    "server": 7776,
+    "session": 1320,
+    "shared": 1,
+    "total_core": 13256,
+    "tx_slots": 2
+  },
+  "STANDARD/trace": {
+    "client": 4168,
+    "framer": 10352,
+    "max_msg": 2048,
+    "max_reasm": 4,
+    "server": 7776,
+    "session": 1320,
+    "shared": 0,
+    "total_core": 19448,
+    "tx_slots": 2
+  }
+}
