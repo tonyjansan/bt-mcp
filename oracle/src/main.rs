@@ -764,6 +764,7 @@ impl Sess {
         let seq = self.alloc_seq();
         let rc = self.frame_seq(K_MCP, seq, json);
         if rc != 0 { return rc; }
+        self.last_ctrl_ms = self.now_ms;   /* v0.6：有实际流量就不需要空闲刷新 */
         if self.credit_on() { self.credits -= 1; }
         if self.unreliable() && !json.is_empty()
             && (ref_mode || json.len() <= TX_RETRY_BYTES) {
