@@ -1,0 +1,9 @@
+{
+  "name": "bt-mcp-sdk-interop",
+  "private": true,
+  "type": "module",
+  "description": "用官方 MCP TypeScript SDK 作为 Host 验证 bt-mcp 的响应是否符合规范",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
+}

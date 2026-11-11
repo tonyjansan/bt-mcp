@@ -22,6 +22,11 @@ jobs:
       - name: Build + all suites (diff / HIL / unit / tiers)
         run: ./build.sh 200
 
+      - name: Official MCP SDK interop (third-party conformance)
+        run: |
+          cd tests/sdk_interop && npm install --silent
+          node sdk_interop.mjs ../../build/btmcp_mock
+
       - name: MCP golden transcripts
         run: python3 tests/golden_replay.py
 

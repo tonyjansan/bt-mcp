@@ -94,6 +94,10 @@ static void write_msgs(void)
 }
 
 static int run_session(const uint8_t *in, size_t in_len);
+/* 交互式 pipe 模式（v0.5 V2）：stdin/stdout 上跑 `u16 len + MCP JSON` 帧，
+ * 供官方 MCP SDK 通过自定义 transport 驱动；帧层（0xB7 分片）在这里不出现，
+ * 因为「规范符合性」只取决于 JSON 层。 */
+static int run_pipe(void);
 
 /* ---- M4a：mcp 模式（L5 差分驱动） ----
  * 输入：u8 chan | u16 mtu | u8 tools_count | [工具]* | 指令序列
@@ -188,6 +192,14 @@ static int tool_allow(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
 
 static int g_rich_tool_present;
 
+/* 失败工具：不写内容直接返回错误（server 应补 "tool error" 且 isError=true） */
+static int tool_fail_pipe(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
+                          bt_mcp_call_t *c, void *user)
+{
+    (void)r; (void)w; (void)c; (void)user;
+    return BT_MCP_E_ARGS;
+}
+
 /* 富内容工具：text + image + audio + resource 四个内容项 */
 static int tool_rich(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
                      bt_mcp_call_t *c, void *user)
@@ -218,12 +230,101 @@ static int prompt_greet(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *us
     return rc;
 }
 
+/* pipe 模式（SDK 互验）用的固定工具表：含一个回显工具 + 授权/富内容工具，
+ * 覆盖 SDK 侧 zod 校验会检查的各类 content 形态。 */
+static const bt_mcp_tool_def_t PIPE_TOOLS[] = {
+    { .name = "echo", .desc = "Echo back the text parameter",
+      .title = "Echo", .input_schema_json =
+          "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},"
+          "\"required\":[\"text\"]}",
+      .annotations = BT_MCP_TOOL_READONLY | BT_MCP_TOOL_IDEMPOTENT,
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_echo },
+    { .name = "rich_tool", .desc = "multi content",
+      .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_rich },
+    { .name = "consent_tool", .desc = "needs consent",
+      .title = "Consent tool",
+      .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+      .output_schema_json = "{\"type\":\"object\"}",
+      .annotations = BT_MCP_TOOL_READONLY,
+      .authz = BT_MCP_AUTHZ_CONSENT, .fn = tool_allow },
+    { .name = "fail_tool", .desc = "always fails",
+      .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+      .authz = BT_MCP_AUTHZ_OPEN, .fn = tool_fail_pipe },
+};
+
 static const bt_mcp_prompt_def_t MOCK_PROMPTS[] = {
     { .name = "greet", .desc = "greeting prompt", .title = "Greet",
       .get = prompt_greet },
 };
 #define MOCK_PROMPT_COUNT ((uint16_t)(sizeof MOCK_PROMPTS / sizeof MOCK_PROMPTS[0]))
 #define MOCK_RES_COUNT ((uint16_t)(sizeof MOCK_RES / sizeof MOCK_RES[0]))
+
+/* 注意：与 run_mcp 不同，这里不预读全量输入，而是逐帧处理并立即 flush 输出。 */
+static int run_pipe(void)
+{
+    static bt_mcp_framer_t fr;
+    static bt_mcp_session_t se;
+    static bt_mcp_server_t sv;
+    static vec_t wire;
+
+    bt_mcp_chan_cap_t cap = { .kind = BT_MCP_CHAN_PACKET, .mtu = 244,
+                              .reliable = 1, .flow_ctrl = 1, .max_pending = 8 };
+    bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
+    bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000,
+                                  .resume_tout_ms = 5000,
+                                  .tx_window = 8, .role = BT_MCP_ROLE_SERVER };
+    bt_mcp_framer_init(&fr, &fcfg, &cap);
+    bt_mcp_session_init(&se, &scfg);
+    bt_mcp_session_bind(&se, &fr, vec_emit, &wire);
+    bt_mcp_session_link_up(&se, 0);
+
+    bt_mcp_server_cfg_t cfg = { .tools = PIPE_TOOLS,
+        .tools_count = (uint16_t)(sizeof PIPE_TOOLS / sizeof PIPE_TOOLS[0]),
+        .resources = MOCK_RES,
+        .resources_count = MOCK_RES_COUNT,
+        .prompts = MOCK_PROMPTS,
+        .prompts_count = MOCK_PROMPT_COUNT,
+        .consent = consent_cb };
+    bt_mcp_server_init(&sv, &se, &cfg, "bt-mcp-device", "0.4");
+
+    for (;;) {
+        uint8_t hdr[2];
+        if (fread(hdr, 1, 2, stdin) != 2) break;          /* EOF */
+        uint16_t n = (uint16_t)(hdr[0] | (hdr[1] << 8));
+        if (!n || n > BT_MCP_CFG_MAX_MSG) break;
+        static uint8_t msg[BT_MCP_CFG_MAX_MSG];
+        if (fread(msg, 1, n, stdin) != n) break;
+        wire.len = 0;
+        (void)bt_mcp_server_rx(&sv, msg, n);
+        /* 把响应剥头、**按 LAST 标志重新拼成整条消息**再写回。
+         * （一个 JSON 响应可能被 L3 拆成多个分片；SDK 只认整条 JSON，
+         *   所以必须在 pipe 边界上做重组。） */
+        static uint8_t joined[BT_MCP_CFG_MAX_MSG];
+        uint32_t jn = 0;
+        size_t off = 0;
+        while (off + BT_MCP_HDR_LEN <= wire.len) {
+            uint8_t  flags = wire.buf[off + 1];
+            uint16_t pl = (uint16_t)(wire.buf[off + 4] | (wire.buf[off + 5] << 8));
+            if (off + BT_MCP_HDR_LEN + pl > wire.len) break;
+            if (jn + pl <= sizeof joined) {
+                memcpy(joined + jn, wire.buf + off + BT_MCP_HDR_LEN, pl);
+                jn += pl;
+            }
+            off += BT_MCP_HDR_LEN + pl;
+            if ((flags & BT_MCP_FLAG_LAST) || off >= wire.len) {
+                if (jn) {
+                    uint8_t oh[2] = { (uint8_t)(jn & 0xFF), (uint8_t)(jn >> 8) };
+                    fwrite(oh, 1, 2, stdout);
+                    fwrite(joined, 1, jn, stdout);
+                }
+                jn = 0;
+            }
+        }
+        fflush(stdout);
+    }
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -232,6 +333,8 @@ int main(int argc, char **argv)
                 argv[0]);
         return 2;
     }
+
+    if (!strcmp(argv[1], "pipe")) return run_pipe();
 
     size_t in_len;
     uint8_t *in = read_all(&in_len);

@@ -109,6 +109,8 @@ cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
 | [`docs/release-notes-v0.3.md`](docs/release-notes-v0.3.md) | v0.3 发布说明（GitHub Release 正文 / PR 描述） |
 | [`docs/v0.3-validation.md`](docs/v0.3-validation.md) | 变更清单、验证口径、实测数据、已知限制 |
 | [`docs/roadmap-v0.4.md`](docs/roadmap-v0.4.md) | v0.4 缺口清单（含代码证据、优先级、工作量） |
+| [`docs/release-notes-v0.4.md`](docs/release-notes-v0.4.md) | v0.4.x 发布说明 + PR 描述（可直接贴 GitHub） |
+| [`docs/v0.4-validation.md`](docs/v0.4-validation.md) | v0.4.x 验证报告（四层验证体系、矩阵、复现命令） |
 | [`docs/roadmap-v0.5.md`](docs/roadmap-v0.5.md) | v0.5 规划与设计（可验证性与互操作） |
 | [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | 协议草案 v0.3（设计原理与接口概要） |
 | [`docs/bt-mcp-interface-spec.html`](docs/bt-mcp-interface-spec.html) | 集成者规约（Proxy/Host 接入） |
