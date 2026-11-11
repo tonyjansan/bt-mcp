@@ -89,6 +89,13 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    -o build/test_reentrancy
 ./build/test_reentrancy
 
+echo "== 多会话隔离 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_multisession.c core/src/frame.c core/src/session.c \
+   core/src/json.c core/src/writer.c core/src/mcp_server.c core/src/err.c \
+   core/src/trace.c -o build/test_multisession
+./build/test_multisession
+
 echo "== 多实例并发（TSan） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_threads.c core/src/frame.c core/src/session.c core/src/json.c \

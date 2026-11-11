@@ -120,6 +120,9 @@
 #ifndef BT_MCP_CFG_S2C_TOUT_MS
 #define BT_MCP_CFG_S2C_TOUT_MS   30000  /* S→C 请求超时 */
 #endif
+#ifndef BT_MCP_CFG_MAX_CONN
+#define BT_MCP_CFG_MAX_CONN      4      /* 一个 server pool 可挂的并发会话数 */
+#endif
 #ifndef BT_MCP_CFG_RTO_MAX_MS
 #define BT_MCP_CFG_RTO_MAX_MS    4800   /* 指数退避后的 RTO 上限（=8×600 基准） */
 #endif

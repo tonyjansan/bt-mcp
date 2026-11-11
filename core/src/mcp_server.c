@@ -1464,6 +1464,46 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     return rx_one(sv, json, len);
 }
 
+/* ---- 多会话池（v0.5 V10）---- */
+
+void bt_mcp_pool_init(bt_mcp_server_pool_t *pool)
+{
+    if (!pool) return;
+    memset(pool, 0, sizeof(*pool));
+}
+
+int bt_mcp_pool_add(bt_mcp_server_pool_t *pool, bt_mcp_server_t *sv)
+{
+    if (!pool || !sv || !sv->sess) return BT_MCP_E_ARGS;
+    if (pool->n >= BT_MCP_CFG_MAX_CONN) return BT_MCP_E_NOMEM;
+    for (uint8_t i = 0; i < pool->n; i++)
+        if (pool->sv[i] == sv) return BT_MCP_OK;      /* 幂等 */
+    pool->sv[pool->n++] = sv;
+    return BT_MCP_OK;
+}
+
+int bt_mcp_pool_rx(bt_mcp_server_pool_t *pool, bt_mcp_session_t *sess,
+                   const uint8_t *json, uint32_t len)
+{
+    if (!pool || (!json && len)) return BT_MCP_E_ARGS;
+    for (uint8_t i = 0; i < pool->n; i++)
+        if (pool->sv[i]->sess == sess)
+            return bt_mcp_server_rx(pool->sv[i], json, len);
+    return BT_MCP_E_ARGS;      /* 未挂载的会话：明确报错，不静默丢弃 */
+}
+
+void bt_mcp_pool_tick(bt_mcp_server_pool_t *pool, uint32_t now_ms)
+{
+    if (!pool) return;
+    for (uint8_t i = 0; i < pool->n; i++)
+        bt_mcp_server_tick(pool->sv[i], now_ms);
+}
+
+uint8_t bt_mcp_pool_count(const bt_mcp_server_pool_t *pool)
+{
+    return pool ? pool->n : 0;
+}
+
 void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms)
 {
     if (!sv) return;

@@ -52,10 +52,12 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_conformance.c $CORE -o "$OUT/t_conf"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_threads.c $CORE -o "$OUT/t_thr" -lpthread
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_multisession.c $CORE -o "$OUT/t_multi"
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -63,7 +65,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

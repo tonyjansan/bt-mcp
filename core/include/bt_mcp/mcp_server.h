@@ -212,6 +212,36 @@ int  bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s,
 /* L4 上抛的完整 MCP 消息入口：解析→分派→响应（经 session_tx） */
 int  bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len);
 void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms);
+
+/* ---- 多会话（v0.5 V10）----
+ * bt_mcp_server_t 本身就是**每会话**上下文（sess / initialized / calls[] /
+ * subs[] / log_level / proto / batch 状态都在实例内）。因此多会话不需要重构
+ * 单实例逻辑，只需要一个「按 session 找实例」的分派器：
+ *
+ *   static bt_mcp_server_t poor_sv, watch_sv;
+ *   static bt_mcp_server_pool_t pool;
+ *   bt_mcp_pool_init(&pool);
+ *   bt_mcp_pool_add(&pool, &phone_sv);    // 每个实例 init 时绑定各自 session
+ *   bt_mcp_pool_add(&pool, &watch_sv);
+ *   ...
+ *   bt_mcp_pool_rx(&pool, sess, json, len);   // 按 session 自动找到对应实例
+ *
+ * 约束（与单会话一致）：每个 bt_mcp_server_t 只被一个线程使用。 */
+typedef struct {
+    bt_mcp_server_t *sv[BT_MCP_CFG_MAX_CONN];
+    uint8_t          n;
+} bt_mcp_server_pool_t;
+
+void bt_mcp_pool_init(bt_mcp_server_pool_t *pool);
+/* 返回 0 成功；E_NOMEM=已满；E_ARGS=参数错或该实例未绑定 session */
+int  bt_mcp_pool_add(bt_mcp_server_pool_t *pool, bt_mcp_server_t *sv);
+/* 按 session 找实例后转发；找不到返回 E_ARGS（不静默丢弃） */
+int  bt_mcp_pool_rx(bt_mcp_server_pool_t *pool, bt_mcp_session_t *sess,
+                    const uint8_t *json, uint32_t len);
+/* 遍历所有实例推进超时（S2C 请求超时等） */
+void bt_mcp_pool_tick(bt_mcp_server_pool_t *pool, uint32_t now_ms);
+/* 已挂载的会话数 */
+uint8_t bt_mcp_pool_count(const bt_mcp_server_pool_t *pool);
 /* 设备主动通知（S→C）；params_json 为内嵌 params 对象原文 */
 int  bt_mcp_server_notify(bt_mcp_server_t *sv, const char *method,
                           const char *params_json, uint32_t params_len);
