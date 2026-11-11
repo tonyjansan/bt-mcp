@@ -9,8 +9,22 @@
 #include "tier.h"
 
 /* ---- 接收面 ---- */
+/* v0.5 V11：共享重组缓冲。
+ * 0 = 每槽独立 buf[MAX_MSG]（默认，支持多消息交织重组）
+ * 1 = 单槽 + 单个 MAX_MSG 缓冲（RAM 从 MAX_REASM×MAX_MSG 降到 MAX_MSG）
+ *
+ * 代价（明确记录）：共享模式只允许**一条**消息在重组中。对端若交织发送多条
+ * 消息，后到的按「槽已占用」丢弃（协议允许，吞吐下降）。适合 RAM 紧张、
+ * 实际只有一个大消息在途的场景（如单连接传感器）。 */
+#ifndef BT_MCP_CFG_SHARED_REASM
+#define BT_MCP_CFG_SHARED_REASM  0
+#endif
 #ifndef BT_MCP_CFG_MAX_REASM
-#define BT_MCP_CFG_MAX_REASM     4      /* 重组槽数 */
+#define BT_MCP_CFG_MAX_REASM     4      /* 重组槽数（共享模式下强制为 1） */
+#endif
+#if BT_MCP_CFG_SHARED_REASM && BT_MCP_CFG_MAX_REASM != 1
+#  undef  BT_MCP_CFG_MAX_REASM
+#  define BT_MCP_CFG_MAX_REASM   1     /* 共享缓冲只能承载一条消息 */
 #endif
 #ifndef BT_MCP_CFG_MAX_MSG
 #define BT_MCP_CFG_MAX_MSG       8192   /* 单消息字节上限（≤ u16 len 可承载） */

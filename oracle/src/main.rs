@@ -57,7 +57,14 @@ const C_ACK: u8 = 6;
 const C_NACK: u8 = 7;
 
 const CTRL_MAX: usize = 255;
-const MAX_REASM: usize = 4;
+/* 重组槽数：默认 4；C 侧用 -DBT_MCP_CFG_SHARED_REASM=1 时是 1，
+ * 差分必须同配置，因此这里也允许用环境变量覆盖（与 FCS16 同模式）。 */
+static MAX_REASM_V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+fn max_reasm() -> usize {
+    *MAX_REASM_V.get_or_init(|| std::env::var("BT_MCP_MAX_REASM")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(4))
+}
 const GAP_WAIT_MAX: u8 = 4;
 const FRAG_TOUT: u32 = 2000;
 const RESUME_TOUT: u32 = 5000;
@@ -155,7 +162,7 @@ fn decode_packet(input: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
         let pos = match slots.iter().position(|s| s.in_use && s.msg_seq == seq) {
             Some(p) => p,
             None => {
-                if slots.len() >= MAX_REASM { continue; }
+                if slots.len() >= max_reasm() { continue; }
                 slots.push(DecSlot { in_use: true, msg_seq: seq, next_idx: 0,
                                      gap_wait: 0, buf: Vec::new() });
                 slots.len() - 1
@@ -261,7 +268,7 @@ impl Sess {
             reliable: !packet, flow_ctrl: !packet,
             tx_seq: 0, fnow: 0,
             nack_pending: false, nack_seq: 0, nack_idx: 0,
-            slots: (0..MAX_REASM).map(|_| SSlot {
+            slots: (0..max_reasm()).map(|_| SSlot {
                 in_use: false, ctrl: false, msg_seq: 0, next_idx: 0, gap_wait: 0,
                 len_total: 0, t_first: 0, t_last: 0, buf: vec![0; MAX_MSG],
             }).collect(),

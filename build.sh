@@ -89,6 +89,23 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    -o build/test_reentrancy
 ./build/test_reentrancy
 
+echo "== 共享重组缓冲（V11，两种配置） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_shared_reasm.c core/src/frame.c core/src/trace.c \
+   -o build/test_shared_reasm
+./build/test_shared_reasm
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
+   -Icore/include tests/test_shared_reasm.c core/src/frame.c core/src/trace.c \
+   -o build/test_shared_reasm1
+./build/test_shared_reasm1
+# 共享模式下跑一遍差分（帧层行为必须不变）
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
+   -Icore/include mock/mock_main.c core/src/frame.c core/src/session.c \
+   core/src/json.c core/src/writer.c core/src/mcp_server.c core/src/err.c \
+   core/src/trace.c -o build/btmcp_mock_shared
+BT_MCP_MOCK=build/btmcp_mock_shared BT_MCP_MAX_REASM=1 \
+    python3 tests/m3_session_harness.py 40
+
 echo "== 多会话隔离 =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_multisession.c core/src/frame.c core/src/session.c \
