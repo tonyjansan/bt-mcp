@@ -214,7 +214,7 @@ IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ REA
 | ACK | 对端消费该消息 | 回 `ACK(seq)`；本地按 seq 释放槽 |
 | NACK 补片 | 本地重组发现缺片 | 发 `NACK(seq, idx)`；对端只重发第 idx 片 |
 | 超时整条重传 | `ack_tout_ms` 内未收到 ACK | 用**原 seq** 重发整条，最多 `retry_max` 次，之后弃槽并计 `stat_tx_dropped` |
-| 接收去重 | 收到已交付过的消息 | `seq + len + CRC32` 指纹窗口（默认 5s/2 条），命中则只回 ACK、不再上抛 |
+| 接收去重 | 收到已交付过的消息 | `seq + len + CRC32` 指纹窗口（默认 5s / `RX_FP_SLOTS`=8 条），命中则只回 ACK、不再上抛 |
 
 **普通 `tx` 只保护「放得下」的消息**（默认 512B/槽 × 2 槽）；更大的消息按 §5.5
 走 resources 分页，或由应用层兜底重试。`BT_MCP_CFG_TX_SLOTS` /
@@ -224,6 +224,30 @@ IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ REA
 原文，只在槽里记 `(seq, len, 指向调用方缓冲的指针)`，重传时从该指针重新编码，
 因此可覆盖到 `MAX_MSG`。**契约**：调用方必须在 ACK 或放弃之前保证该缓冲有效；
 槽释放（ACK / 超限丢弃 / NACK 完成）时一律清空引用，避免悬空指针。
+
+**去重的边界（v0.6 实测校准，重要）**：
+「恰好一次」是**有界保证**，不是无条件保证。去重表只有固定个槽，且带
+`rx_msg_no` 记代护栏；一旦副本的到达延迟超过窗口深度，原指纹已被挤出，
+该副本会被当作新消息二次上抛。
+
+v0.6 的链路仿真 soak 实测（`tests/test_soak.c`）：
+
+| 场景 | 重复投递 | 说明 |
+|---|---|---|
+| 干净链路 | 0 | — |
+| 10% 丢包（窗口 4） | 6 / 120 条 | v0.6 之前 |
+| 10% 丢包（窗口 8） | 1 / 120 条 | 加宽后大幅收敛 |
+| 30%~50% 丢包 + 突发 | 2~5 / 120 条 | **仍有缺口**，见 roadmap N6 遗留项 |
+
+两种正确用法：(a) 把窗口调到 ≥ 链路最大乱序/延迟深度；(b) 要求幂等的工具
+由应用层按自己的业务键去重。**协议不会静默假装零重复**——
+`stat_rx_dup` 统计被拦下的重复，`stat_tx_dropped` 统计「放弃重试」的次数。
+
+**空闲信用刷新（v0.6）**——累计 CREDIT 帧不受 ARQ 保护，丢一个就少一格信用；
+若此时发送方信用耗尽且管道已空，对端没有「新的消费」可用来重发 CREDIT，
+于是**永久 `E_AGAIN`**（v0.6 soak 实测：30% 丢包下整个会话卡死）。
+修复：`session_tick` 在空闲超过 `BT_MCP_CFG_CREDIT_REFRESH_MS`（默认 600ms）
+且本周期无实际流量时，重发一次累计 CREDIT。载荷是绝对值，重发幂等。
 
 **拥塞退避（v0.5）**——ACK 超时不再固定，而是会话级 RTO：
 
@@ -741,11 +765,12 @@ for (;;) {
 /* ---- 不可靠包通道的消息级可靠（§5.4）---- */
 #define BT_MCP_CFG_TX_SLOTS         2      /* 重传槽数 */
 #define BT_MCP_CFG_TX_RETRY_BYTES   512    /* 普通 tx 的逐槽副本容量 */
-#define BT_MCP_CFG_RX_FP_SLOTS      4      /* 接收去重指纹槽（≥ TX_SLOTS） */
+#define BT_MCP_CFG_RX_FP_SLOTS      8      /* 接收去重指纹槽（≥ TX_SLOTS；v0.6: 4→8） */
 #define BT_MCP_CFG_ACK_TOUT_MS      600    /* ACK 时限基准，也是 RTO 回落值 */
 #define BT_MCP_CFG_MAX_RETRY        3      /* 每消息重传上限 */
 #define BT_MCP_CFG_DEDUPE_MS        5000
 #define BT_MCP_CFG_RTO_MAX_MS       4800   /* 指数退避上限（v0.5） */
+#define BT_MCP_CFG_CREDIT_REFRESH_MS 600   /* 空闲信用刷新周期（v0.6） */
 
 /* ---- 安全（§6）---- */
 #define BT_MCP_CFG_RESUME_MAX_FAIL  3

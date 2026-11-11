@@ -25,7 +25,12 @@ byte channel, with zero vendor ifdefs and zero OS dependencies.
 | 官方 MCP TypeScript SDK 互验 | **38** |
 | golden transcript | **20** |
 
-覆盖率：行 **94.7%** / 分支 **67.1%**（门禁 94/66）。
+覆盖率：行 **95%** / 分支 **68%**（门禁 95/68）。
+静态 RAM 有 12 组合基线门禁（`tools/ram_baseline.py`），回归即失败。
+
+v0.6 追加的验证层：表驱动组合矩阵（3141 自动生成用例）、语法感知 fuzz
+（375 万次零违反）、正交差分矩阵（16 组合 + 配置签名比对）、链路仿真 soak
+（8 轮阶梯加压）、多会话压测（4×4）。
 ASan/UBSan 全绿，TSan 干净，fuzz 帧层 200 万轮 + FCS16 80 万轮零崩溃。
 
 ## 规范覆盖（v0.5）
