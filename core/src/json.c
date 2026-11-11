@@ -236,7 +236,7 @@ static int64_t parse_i64(const char *p, const char *e)
     return (int64_t)acc;
 }
 
-int bt_mcp_json_parse(const char *src, uint32_t len, bt_mcp_json_req_t *out)
+static int parse_core(const char *src, uint32_t len, bt_mcp_json_req_t *out)
 {
     if (!src || !out) return BT_MCP_E_ARGS;
     memset(out, 0, sizeof(*out));
@@ -284,8 +284,20 @@ int bt_mcp_json_parse(const char *src, uint32_t len, bt_mcp_json_req_t *out)
         if (peek(&c, ',')) c.p++;
         else if (!peek(&c, '}') && c.p < c.end) return BT_MCP_E_PARSE;
     }
+    return BT_MCP_OK;
+}
+
+int bt_mcp_json_parse(const char *src, uint32_t len, bt_mcp_json_req_t *out)
+{
+    int rc = parse_core(src, len, out);
+    if (rc) return rc;
     if (!out->method) return BT_MCP_E_PARSE;   /* MCP 最小请求必须有 method */
     return BT_MCP_OK;
+}
+
+int bt_mcp_json_parse_msg(const char *src, uint32_t len, bt_mcp_json_req_t *out)
+{
+    return parse_core(src, len, out);
 }
 
 /* params 片段内顶层键查找（params 可能是 {} 或裸值；只支持对象形态） */
@@ -345,10 +357,43 @@ int bt_mcp_json_get_u32(const bt_mcp_json_req_t *r, const char *key, uint32_t *o
     return BT_MCP_OK;
 }
 
+int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *out)
+{
+    const char *v; uint32_t vl;
+    int rc = find_key(r, key, &v, &vl);
+    if (rc) return rc;
+    if (!vl) return BT_MCP_E_PARSE;
+    uint32_t i = 0;
+    int neg = 0;
+    if (v[0] == '-') { neg = 1; i = 1; }
+    if (i >= vl) return BT_MCP_E_PARSE;
+    int64_t acc = 0;
+    for (; i < vl; i++) {
+        if (!is_digit(v[i])) return BT_MCP_E_PARSE;
+        acc = acc * 10 + (v[i] - '0');
+        if (acc > 2147483648LL) acc = 2147483648LL;
+    }
+    *out = (int32_t)(neg ? -acc : acc);
+    return BT_MCP_OK;
+}
+
 int bt_mcp_json_get_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len)
 {
     return find_key(r, key, out, len);
+}
+
+int bt_mcp_json_top_raw(const bt_mcp_json_req_t *r, const char *key,
+                        const char **out, uint32_t *len)
+{
+    if (!r || !r->src) return BT_MCP_E_ARGS;
+    bt_mcp_json_req_t whole;
+    memset(&whole, 0, sizeof whole);
+    whole.src = r->src;
+    whole.len = r->len;
+    whole.params = r->src;          /* 把整个对象当作 params 片段来扫顶层键 */
+    whole.params_len = r->len;
+    return find_key(&whole, key, out, len);
 }
 
 int bt_mcp_json_get_sub(const bt_mcp_json_req_t *r, const char *key,

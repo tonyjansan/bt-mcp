@@ -37,6 +37,7 @@ static void vec_sink(void *user, uint8_t kind, uint8_t seq,
 {
     vec_t *v = user;
     (void)kind;
+    (void)seq;
     vec_emit(v, payload, len);
     v->n++;
 }

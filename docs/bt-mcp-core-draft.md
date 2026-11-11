@@ -1,7 +1,18 @@
-# BT-MCP 核心协议草案 v0.2 —— 平台无关设计
+# BT-MCP 核心协议草案 v0.3 —— 平台无关设计
 
-日期：2026-11-03 · 状态：草案
-本版相对 v0.1 的关键变化：**剥离一切具体芯片/厂商假设**，承载通道扩展为 GATT / SPP(RFCOMM) / L2CAP CoC / 串行字节流统一模型，分帧与接口用标准 C99 概要描述。
+日期：2026-11-10 · 状态：草案（v0.3 实现已验证：1339 项差分 + 184 项 HIL + 63 项单元检查全绿）
+本版相对 v0.2 的关键变化：
+- **不可靠包通道从「不可用」变为「可用」**：新增 ACK/NACK 控制帧、发送重传槽、
+  接收去重窗口，丢片可在本层恢复（§4.2/§5.4）；
+- **信用闭环**：消费即回补，不再依赖应用层手工 `session_ctrl(CREDIT)`（§5.3）；
+- **MCP 互通补齐**：`protocolVersion` 协商回显、`serverInfo` 嵌套对象、
+  `_meta.io.btmcp` 通道能力声明真正上线（§5.2/§5.5）；
+- **resources 面落地**：`resources/list` / `resources/read` + 游标分页（§5.5）；
+- **异步与取消**：`tools/call` 支持 `E_PENDING` + `notifications/progress` +
+  `notifications/cancelled`（§5.6）；
+- **RESUME 防爆破**：连续失败指数退避锁定、token 常数时间比较（§6.2）；
+- **内存档位**：`BT_MCP_TIER` 一处开关把静态 RAM 从 4.0KB 调到 41KB（§7.3）；
+- **单次 emit**：一个分片 = 一次 port 回调，消除「头/载荷两次回调」的集成坑（§4.4）。
 
 ---
 
@@ -97,17 +108,22 @@ typedef struct bt_mcp_chan_cap {
 
 | type | 名称 | payload | 用途 |
 |---|---|---|---|
-| 0x01 | CREDIT | u16 credits | L4 应用层信用补给（包通道用） |
-| 0x02 | PING | u8 epoch | 应用层存活探针（可选周期；无则靠 MCP ping） |
+| 0x01 | CREDIT | u16 credits | L4 应用层信用补给（包通道用；饱和到 255） |
+| 0x02 | PING | u8 epoch | 应用层存活探针 + RTT 测量（epoch 回显匹配） |
 | 0x03 | RESUME_REQ | u32 token | 重连后请求恢复会话 |
 | 0x04 | RESUME_OK | u32 token | 同意恢复（回相同 token） |
-| 0x05 | RESUME_REJ | u8 reason | 拒绝（token 过期/bond 丢失）→ 双方回 IDLE |
+| 0x05 | RESUME_REJ | u8 reason | 拒绝：1=无 token 2=不匹配 3=锁定中 |
+| 0x06 | ACK | u8 seq | 消息级确认：释放对端重传槽（v0.3） |
+| 0x07 | NACK | u8 seq ⁝ u8 idx | 缺片补发请求：对端只重发该片（v0.3） |
 
 控制帧不解 JSON、不进 L5，在 L4 终结；这是唯一绕过 MCP 语义的旁路，用于「还没握手/已断语义」两种 MCP 管不到的状态。
 
 ### 4.3 重组与去重
 
-- 包通道：按 `seq` 滑窗丢弃迟到重复片；重组槽 = 静态数组（槽数 = 通道能力 `max_pending`，编译期上限 `BT_MCP_CFG_MAX_REASM`，默认 4）。
+- 包通道：按 `seq` 匹配重组槽，槽数 = 通道能力 `max_pending`（编译期上限
+  `BT_MCP_CFG_MAX_REASM`，默认 4）。v0.3 判例：`idx < next_idx` 的迟到重复片
+  静默忽略；`idx > next_idx` 视为丢片，**槽位保持存活**并登记 NACK，等对端
+  单片补发（同一槽连续 4 次补不齐才弃槽，防对端永久失联占死缓冲）。
 - 流通道：帧边界即消息边界（CHUNKED=0），重组器退化为「6B 头 + len 字节」的流解析器，同一份状态机代码、不同喂入路径。
 - 重组超时：跨片间隔 > `BT_MCP_CFG_FRAG_TOUT_MS`（默认 2000ms）丢弃整消息并回收槽位（防半帧占死缓冲）。
 
@@ -124,7 +140,25 @@ IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ REA
 
 - READY 前只允许控制帧与 MCP initialize；READY 后只允许 MCP + CREDIT/PING。
 - 断链重连：先试 RESUME（1 往返，恢复 pending 请求映射与授权缓存），被拒或无 token 走完整握手。RESUME token 绑定 bond（见 §6），bond 丢失则 token 一并作废。
-- 包通道信用：对端重组槽数即我方发送窗口；CREDIT 帧按「已对端消费的消息数」增量补给。流通道 `flow_ctrl=1` 时 L4 直接放行（帧层自身不做重传——流通道语义已可靠）。
+- 包通道信用：对端重组槽数即我方发送窗口；**每消费对端一条 MCP 消息自动回补 1
+  credit**（饱和到 255），不再依赖应用层手工调用 `session_ctrl(CREDIT)`。
+  流通道或 `flow_ctrl=1` 的通道（CoC）直接放行，不记账。
+
+### 5.4 不可靠包通道的消息级可靠（v0.3 新增）
+
+`cap.reliable == 0`（GATT notify 即此类）时 L4 启用：
+
+| 机制 | 触发 | 行为 |
+|---|---|---|
+| 发送重传槽 | `session_tx` 成功发出 | 消息体（≤ `BT_MCP_CFG_TX_RETRY_BYTES`）入槽环，记录 seq |
+| ACK | 对端消费该消息 | 回 `ACK(seq)`；本地按 seq 释放槽 |
+| NACK 补片 | 本地重组发现缺片 | 发 `NACK(seq, idx)`；对端只重发第 idx 片 |
+| 超时整条重传 | `ack_tout_ms` 内未收到 ACK | 用**原 seq** 重发整条，最多 `retry_max` 次，之后弃槽并计 `stat_tx_dropped` |
+| 接收去重 | 收到已交付过的消息 | `seq + len + CRC32` 指纹窗口（默认 5s/2 条），命中则只回 ACK、不再上抛 |
+
+槽只保护「放得下」的消息（默认 512B/槽 × 2 槽）；更大的消息按 §5.5 走 resources
+分页，或由应用层兜底重试——这是显式的 RAM/可靠性权衡，不是静默降级。
+`BT_MCP_CFG_TX_SLOTS` / `BT_MCP_CFG_TX_RETRY_BYTES` 可调。
 
 ### 5.2 MCP 子集（线上方法与标准 MCP 完全同形）
 
@@ -135,16 +169,39 @@ IDLE ──连接建立(chan_cap)──▶ LINK_UP ──initialize──▶ REA
 裁剪（不声明 capabilities 即规范合法）：prompts / sampling / roots / elicitation /
 completions / logging / batch / OAuth。
 
-### 5.3 大 payload 分页约定
+### 5.6 异步调用、进度与取消（v0.3 新增）
 
-resource URI 自带窗口与游标：`bt-mcp://<cat>/<name>?window=N&cursor=<token>`，
-响应为 `{ content, nextCursor? }`，与 tools/list 分页同形。分页让单消息上限固化
-在 8KB，任何档位 RAM 的设备都可实现完整资源面。
+- 工具回调可返回 `BT_MCP_E_PENDING`：L5 暂不回响应，调用槽（`bt_mcp_call_t`）
+  保持有效，直到应用调用 `bt_mcp_server_complete(call, text, is_error)`。
+- 请求带 `params._meta.progressToken` 时，工具内可调 `bt_mcp_call_progress()`，
+  L5 发出 `notifications/progress`（`progressToken/progress/total`）。
+- `notifications/cancelled`（`params.requestId`）按 id 标记调用；被取消的调用
+  在 `complete()` 时**不发出任何字节**，工具可轮询 `bt_mcp_call_cancelled()` 提前收手。
+- 同步路径不变：工具照常把文本写进 `out`，L5 负责转义并包成
+  `{"content":[{"type":"text","text":…}],"isError":…}`（v0.3 修掉了旧的
+  双层转义与缺引号问题）。
+
+### 5.5 资源与大 payload 分页约定
+
+resource URI 自带窗口与游标：`bt-mcp://dev/<name>?cursor=<token>`，
+`resources/read` 响应为
+`{"contents":[{"uri","mimeType","text"}],"nextCursor"?}`；
+`resources/list` 与 `tools/list` 用 `{"…":[…],"nextCursor"?}` 同形分页
+（每页 `BT_MCP_CFG_PAGE_SIZE`，默认 8）。
+
+资源读取由注册表里的 `read(user, cursor, &text, &len, &next_cursor)` 提供：
+返回 `[cursor, next)` 窗口的**静态切片**（server 只读不拷贝，零分配），
+`next_cursor == BT_MCP_CURSOR_END` 表示读完。分页让单消息上限固化在档位值
+（4KB/2KB/8KB），任何档位 RAM 的设备都能实现完整资源面。
 
 ## 6. 安全
 
 1. 强制要求蓝牙配对加密（LE：Secure Connections；Classic：SSP MITM 模式），由 port 层在 LINK_UP 前核验，未加密通道拒绝进入握手（调试编译期可豁免）。
-2. RESUME token 绑定 bond 标识（地址解析/链路密钥指纹），bond 删除即 token 失效；防「换手机静默继承会话」。
+2. RESUME token 绑定 bond 标识（地址解析/链路密钥指纹），bond 删除即 token 失效；
+   防「换手机静默继承会话」。v0.3 追加防爆破：连续失败 ≥3 次进入退避锁定
+   （30s 起、逐次翻倍、上限 8×），锁定期间一律回 `RESUME_REJ(3)`；token 比较
+   用常数时间实现，避免时序侧信道。port 侧应生成 ≥32bit 且来自 CSPRNG 的 token
+   （强建议：`HMAC(bond_key, counter)` 截断到 32bit 或扩展为 64bit 载荷）。
 3. 工具级授权：`open / consent / restricted` 三级，consent 弹窗确认在设备 UI（无 UI 设备则由 Bridge 端展示）；授权缓存随 session（resume 后失效，须重新确认 restricted 级）。
 4. 不做 OAuth/token——会话生命周期 = 加密链路 + bond 生命周期。
 
@@ -307,21 +364,46 @@ for (;;) {
 ### 7.2 配置（编译期，全部集中在 bt_mcp/config.h，无 vendor ifdef）
 
 ```c
+/* 容量（可被 BT_MCP_TIER 一键覆盖，§7.3） */
 #define BT_MCP_CFG_MAX_REASM     4      /* 重组槽数 */
 #define BT_MCP_CFG_MAX_MSG       8192   /* 单消息字节上限 */
-#define BT_MCP_CFG_MAX_REQ_INFLIGHT 2   /* 同时处理 tools/call 数 */
-#define BT_MCP_CFG_FCS16         0      /* 通道无链路校验时置 1 */
+#define BT_MCP_CFG_MAX_FRAG      32     /* 单消息分片数上限 */
 #define BT_MCP_CFG_FRAG_TOUT_MS  2000
-#define BT_MCP_CFG_HEAP          0      /* 0=纯静态；非 0 时允许 malloc（宿主机） */
+/* 不可靠包通道可靠性（§5.4） */
+#define BT_MCP_CFG_TX_SLOTS        2
+#define BT_MCP_CFG_TX_RETRY_BYTES  512
+#define BT_MCP_CFG_RX_FP_SLOTS     2
+#define BT_MCP_CFG_ACK_TOUT_MS     600
+#define BT_MCP_CFG_MAX_RETRY       3
+#define BT_MCP_CFG_DEDUPE_MS       5000
+/* 安全（§6.2） */
+#define BT_MCP_CFG_RESUME_MAX_FAIL 3
+#define BT_MCP_CFG_RESUME_LOCK_MS  30000
+/* L5 */
+#define BT_MCP_CFG_PAGE_SIZE       8
+#define BT_MCP_CFG_MAX_PENDING     2
+#define BT_MCP_CFG_FCS16           0   /* 通道无链路校验时置 1 */
 ```
+（全静态：无 `BT_MCP_CFG_HEAP`。宿主机侧 mock/oracle 自行用动态内存，core 不用。）
+
+### 7.3 内存档位（`bt_mcp/tier.h`）
+
+`-DBT_MCP_TIER=BT_MCP_TIER_COMPACT|STANDARD|FULL` 一键选容量；线上字节完全一致，
+只有单消息上限/槽数/分页大小不同。实测静态 RAM（framer+session+server）：
+
+| 档位 | MAX_MSG | 槽 | 静态 RAM | 适用 |
+|---|---|---|---|---|
+| COMPACT | 1024 | 2 | **4048 B** | 64KB SRAM 级 BLE SoC（8/16 位 MCU）|
+| STANDARD | 2048 | 4 | **11760 B** | 128KB SRAM 级，主流可穿戴 |
+| FULL | 8192 | 4 | **42480 B** | 256KB+ SRAM / 网关 / 宿主 |
 
 ## 8. Port 清单（协议核心之外的全部工作）
 
 | port | 平台无关度 | 实现要点 |
 |---|---|---|
-| GATT | 任意 BLE 栈（vendor host/Zephyr/bluedroid/NimBLE…）：定义一个 3 特征服务（Ctrl notify+write / Dn notify / Up write-no-rsp），ATT_MTU−3 填 cap.mtu；栈回调转投协议上下文 | 唯一必选 |
-| SPP | 任意 Classic 栈：SDP 注册 SPP、RFCOMM 通道，直接流通道 | 双模设备可选 |
-| L2CAP CoC | 支持 LE Credit Based 的栈：credit 回调映到 cap.flow_ctrl | 网关场景可选 |
+| GATT | 任意 BLE 栈（vendor host/Zephyr/bluedroid/NimBLE…）：定义一个 3 特征服务（Ctrl notify+write / Dn notify / Up write-no-rsp），ATT_MTU−3 填 cap.mtu，**reliable=0**（开启 §5.4 重传）；栈回调转投协议上下文 | 唯一必选 |
+| SPP | 任意 Classic 栈：SDP 注册 SPP、RFCOMM 通道，直接流通道（reliable=1、flow_ctrl=1）| 双模设备可选 |
+| L2CAP CoC | 支持 LE Credit Based 的栈：`coc_port.h`，cap = PACKET + reliable=1 + flow_ctrl=1（只保留分片，免信用免重传）| 网关场景可选 |
 | host-mock | POSIX：socketpair 仿真包/流通道 | CI/golden/fuzz 必备 |
 
 SPP 与 GATT 之上协议核心**零代码差异**：唯一区别是 port 填的 `bt_mcp_chan_cap_t`。
@@ -338,7 +420,10 @@ SPP 与 GATT 之上协议核心**零代码差异**：唯一区别是 port 填的
 
 ## 10. 路线与验证
 
-- M1：frame.c + host-mock + Python 参照实现做 golden 字节差分 + libFuzzer 喂帧（含截断/乱序/重复/失步流）；出口 = 双向字节 100% 一致、fuzz 24h 零 crash。
-- M2：session+mcp_server 最小闭环（GATT port，任一可得平台）+ 手机 Bridge；出口 = initialize→tools/list→tools/call E2E。
-- M3：SPP port（与 GATT 同二进制各编一份对照测试，验证「零 core 差异」）；断链注入/窗口压满/authorization 流。
-- M4：CoC port、吞吐与功耗基线；开放给目标芯片各厂移植。
+- M1 ✅：frame.c + host-mock + 独立 Rust oracle 做差分 + 独立 fuzz 引擎喂帧（截断/乱序/重复/失步流）；
+  出口 = 双向字节 100% 一致、fuzz 零 crash。
+- M2 ✅：session+mcp_server 闭环；出口 = initialize→tools/list→tools/call E2E + 63 项单元检查。
+- M3 ✅：GATT（包/不可靠）与 SPP（流/可靠）两套 port 同一份 core 背靠背对照（184 项 HIL）；
+  断链注入/窗口压满/RESUME/去重/重传全覆盖。
+- M4 ✅：CoC port 落地（`coc_port.h`）；差分覆盖升到 1339 项。
+- 待办：真实芯片移植示例（Zephyr/NimBLE）、手机 Bridge 代码、吞吐/功耗基线实测。

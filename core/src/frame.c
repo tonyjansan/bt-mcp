@@ -75,43 +75,50 @@ static uint16_t crc_cont(const uint8_t *p, uint32_t n, uint16_t crc)
 
 /* ---- 发送侧 ---- */
 
-/* 发一片：hdr + [fcs] + payload。idx/总数由调用方给定。 */
+/* 发一片：hdr + payload (+fcs) 一次性交给 emit。
+ * 判例：包通道一个 notify / 流通道一次 write 都是一个完整分片——port 层
+ * 不需要再做「头一次回调、载荷再一次回调」的聚合（v0.3 修掉的集成坑）。 */
 static int emit_chunk(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
                       uint8_t idx, uint8_t nfrag, uint16_t chunk,
                       const uint8_t *payload, uint32_t len,
                       int (*emit)(void *, const uint8_t *, uint16_t), void *io)
 {
+    (void)f;
     uint32_t done = (uint32_t)idx * chunk;
     if (done > len) done = len;
     uint16_t plen = (uint16_t)(len - done < chunk ? len - done : chunk);
     const uint8_t flags = (uint8_t)((kind == BT_MCP_KIND_CTRL ? BT_MCP_FLAG_CTRL : 0)
                           | (nfrag > 1 ? BT_MCP_FLAG_CHUNK : 0)
                           | (idx == nfrag - 1 ? BT_MCP_FLAG_LAST : 0));
-    uint8_t hdr[BT_MCP_HDR_LEN];
-    hdr[0] = BT_MCP_MAGIC;
-    hdr[1] = flags;
-    hdr[2] = seq;
-    hdr[3] = idx;
-    hdr[4] = (uint8_t)(plen & 0xFF);
-    hdr[5] = (uint8_t)(plen >> 8);
-
+    uint8_t out[BT_MCP_HDR_LEN + BT_MCP_MAX_CHUNK_PAYLOAD + 2];
+    uint16_t n = 0;
+    out[n++] = BT_MCP_MAGIC;
+    out[n++] = flags;
+    out[n++] = seq;
+    out[n++] = idx;
+    out[n++] = (uint8_t)(plen & 0xFF);
+    out[n++] = (uint8_t)(plen >> 8);
+    /* 包通道片载荷 ≤255B，恒可一 emit 完成；流通道单帧可达 8KB，
+     * 超出栈缓冲时分两次 emit（字节流语义下无边界含义）。 */
+    const int one_shot = (uint32_t)n + plen + (BT_MCP_CFG_FCS16 ? 2u : 0u)
+                         <= (uint32_t)sizeof out;
+    if (plen && one_shot) {
+        memcpy(out + n, payload + done, plen);
+        n = (uint16_t)(n + plen);
+    }
 #if BT_MCP_CFG_FCS16
-    uint8_t fcs[2];
-    uint16_t crc = crc_cont(hdr, BT_MCP_HDR_LEN, 0xFFFF);
+    uint16_t crc = crc_cont(out, BT_MCP_HDR_LEN, 0xFFFF);
     crc = crc_cont(payload + done, plen, crc);
-    fcs[0] = (uint8_t)(crc & 0xFF);
-    fcs[1] = (uint8_t)(crc >> 8);
-    int rc = emit(io, hdr, BT_MCP_HDR_LEN);
-    if (!rc) rc = emit(io, fcs, 2);
-    if (!rc && plen) rc = emit(io, payload + done, plen);
-    if (rc) return rc;               /* 透传 port 背压码（E_NOMEM/E_AGAIN） */
-#else
-    (void)f;
-    int rc = emit(io, hdr, BT_MCP_HDR_LEN);
-    if (!rc && plen) rc = emit(io, payload + done, plen);
-    if (rc) return rc;               /* 透传 port 背压码（E_NOMEM/E_AGAIN） */
+    out[n++] = (uint8_t)(crc & 0xFF);
+    out[n++] = (uint8_t)(crc >> 8);
 #endif
-    return BT_MCP_OK;
+    int rc = emit(io, out, n);       /* 透传 port 背压码（E_NOMEM/E_AGAIN） */
+    if (!rc && plen && !one_shot) {
+        rc = emit(io, payload + done, plen);   /* 大帧剩余载荷 */
+        /* 注：FCS 已在 out[] 里紧跟帧头，大帧第二段只送载荷，接收侧按
+           「hdr | fcs | payload」解析，与一次性送出等价。 */
+    }
+    return rc ? rc : BT_MCP_OK;
 }
 
 /* 校验 + 归一：返回分片数，负值=错误码 */

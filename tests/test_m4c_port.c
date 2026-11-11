@@ -6,6 +6,7 @@
  * 断言全过输出 ALL GREEN + 检查数。 */
 #include "bt_mcp/gatt_port.h"
 #include "bt_mcp/spp_port.h"
+#include "bt_mcp/coc_port.h"
 #include "bt_mcp/session.h"
 #include <stdio.h>
 #include <string.h>
@@ -15,29 +16,24 @@
     checks++; \
 } while (0)
 
-/* 片旁路记录：framer 每片 emit 两次（hdr=HDR_LEN、payload），而 GATT
- * notify = hdr+payload 一体到达。聚合：hdr emit 开新 notify 槽，payload
- * 追加同槽；槽长入 frag_log，包通道按槽直通对端 feed。 */
+/* 片旁路记录：v0.3 起 framer 每片只 emit 一次（hdr+payload 一体），
+ * 也就是「一个 notify = 一次 emit」。这里原样记槽，供包通道逐 notify 喂对端。 */
 static uint8_t  frag_buf[64][BT_MCP_HDR_LEN + 256];
 static uint16_t frag_log[64];
 static int      frag_n;
 
-static int emit_log_gatt(void *io, const uint8_t *d, uint16_t n)
+static int (*g_port_emit)(void *, const uint8_t *, uint16_t);
+
+static int emit_log_any(void *io, const uint8_t *d, uint16_t n)
 {
-    if (n == BT_MCP_HDR_LEN) {              /* 新片 hdr：开新槽 */
-        if (frag_n < 64) {
-            memcpy(frag_buf[frag_n], d, n);
-            frag_log[frag_n] = n;
-        }
-        frag_n++;
-    } else if (frag_n > 0 && frag_n <= 64) {  /* payload 追加当前槽 */
-        if (frag_log[frag_n - 1] + n <= BT_MCP_HDR_LEN + 256) {
-            memcpy(frag_buf[frag_n - 1] + frag_log[frag_n - 1], d, n);
-            frag_log[frag_n - 1] += n;
-        }
+    if (frag_n < 64 && n <= BT_MCP_HDR_LEN + 256) {
+        memcpy(frag_buf[frag_n], d, n);
+        frag_log[frag_n] = n;
     }
-    return bt_mcp_gatt_emit(io, d, n);
+    frag_n++;
+    return g_port_emit ? g_port_emit(io, d, n) : 0;
 }
+#define emit_log_gatt emit_log_any
 
 static int msg_count;
 static void count_sink(void *u, uint8_t kind, uint8_t seq,
@@ -52,28 +48,35 @@ struct endpoint {
     bt_mcp_session_t sess;
     bt_mcp_gatt_port_t gp;
     bt_mcp_spp_port_t sp;
-    int is_gatt;
+    bt_mcp_coc_port_t cp;
+    int kind;               /* 0=gatt 1=spp 2=coc */
 };
 
 static int ep_init(struct endpoint *e, int is_gatt, uint16_t att_mtu,
                    int role)
 {
     memset(e, 0, sizeof *e);
-    e->is_gatt = is_gatt;
+    e->kind = (is_gatt == 2) ? 2 : (is_gatt ? 1 : 0);
     bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
     bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
                                   .tx_window = 4, .role = (uint8_t)role };
     int rc;
-    if (is_gatt) {
+    if (is_gatt == 1) {
         if ((rc = bt_mcp_gatt_port_init(&e->gp, att_mtu)) != 0) return rc;
         if ((rc = bt_mcp_framer_init(&e->fr, &fcfg, &e->gp.cap)) != 0) return rc;
         if (bt_mcp_session_init(&e->sess, &scfg)) return -100;
         bt_mcp_session_bind(&e->sess, &e->fr, bt_mcp_gatt_emit, &e->gp);
-    } else {
+    } else if (is_gatt == 0) {
         if ((rc = bt_mcp_spp_port_init(&e->sp)) != 0) return rc;
         if ((rc = bt_mcp_framer_init(&e->fr, &fcfg, &e->sp.cap)) != 0) return rc;
         if (bt_mcp_session_init(&e->sess, &scfg)) return -101;
         bt_mcp_session_bind(&e->sess, &e->fr, bt_mcp_spp_emit, &e->sp);
+    } else {
+        /* CoC：PACKET + reliable + 自带流控（只保留分片） */
+        if ((rc = bt_mcp_coc_port_init(&e->cp, att_mtu)) != 0) return rc;
+        if ((rc = bt_mcp_framer_init(&e->fr, &fcfg, &e->cp.cap)) != 0) return rc;
+        if (bt_mcp_session_init(&e->sess, &scfg)) return -102;
+        bt_mcp_session_bind(&e->sess, &e->fr, bt_mcp_coc_emit, &e->cp);
     }
     return 0;
 }
@@ -132,6 +135,7 @@ int main(void)
         bt_mcp_session_link_up(&c.sess, 0);
         bt_mcp_session_link_up(&s.sess, 1);
         /* tx 前换上片旁路 emit（包通道按片直通对端须片边界） */
+        g_port_emit = bt_mcp_gatt_emit;
         bt_mcp_session_bind(&c.sess, &c.fr, emit_log_gatt, &c.gp);
         frag_n = 0;
         CHECK(bt_mcp_session_tx(&c.sess, (const uint8_t *)INIT,
@@ -156,6 +160,7 @@ int main(void)
         CHECK(ep_init(&s, 1, 26, BT_MCP_ROLE_SERVER) == 0);
         bt_mcp_session_link_up(&c.sess, 0);
         bt_mcp_session_link_up(&s.sess, 1);
+        g_port_emit = bt_mcp_gatt_emit;
         bt_mcp_session_bind(&c.sess, &c.fr, emit_log_gatt, &c.gp);
         frag_n = 0;
         CHECK(bt_mcp_session_tx(&c.sess, (const uint8_t *)INIT,
@@ -170,6 +175,35 @@ int main(void)
         }
         CHECK(msg_count == 1);                    /* 末片触发重组 */
         CHECK(bt_mcp_gatt_port_used(&c.gp) == 0);
+    }
+
+    /* ---- CoC 全链路 HIL：PACKET+reliable+自带流控，只保留分片 ---- */
+    {
+        struct endpoint c, s;
+        CHECK(ep_init(&c, 2, 40, BT_MCP_ROLE_CLIENT) == 0);   /* CoC MTU=40 */
+        CHECK(ep_init(&s, 2, 40, BT_MCP_ROLE_SERVER) == 0);
+        CHECK(c.fr.cap->kind == BT_MCP_CHAN_PACKET);
+        CHECK(c.fr.cap->reliable == 1);
+        CHECK(c.fr.cap->flow_ctrl == 1);
+        bt_mcp_session_link_up(&c.sess, 0);
+        bt_mcp_session_link_up(&s.sess, 1);
+        g_port_emit = bt_mcp_coc_emit;
+        bt_mcp_session_bind(&c.sess, &c.fr, emit_log_gatt, &c.cp);
+        frag_n = 0;
+        CHECK(bt_mcp_session_tx(&c.sess, (const uint8_t *)INIT,
+                                (uint32_t)strlen(INIT)) == 0);
+        CHECK(frag_n >= 2);                     /* 58B / (40-6)=34 → 2 片 */
+        msg_count = 0;
+        for (int i = 0; i < frag_n; i++) {
+            uint32_t got = bt_mcp_coc_drain(&c.cp, tmp, frag_log[i]);
+            CHECK(got == frag_log[i]);
+            CHECK(bt_mcp_framer_feed(&s.fr, tmp, (uint16_t)got,
+                                     count_sink, NULL) == 0);
+        }
+        CHECK(msg_count == 1);
+        /* 自有流控通道：不做应用层信用记账、不注册重传槽 */
+        CHECK(c.sess.credits == 4);
+        CHECK(c.sess.txslot[0].valid == 0);
     }
 
     /* ---- SPP 全链路 HIL：流通道任意字节段喂入（1B~7B 混合切分） ---- */

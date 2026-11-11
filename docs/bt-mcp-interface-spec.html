@@ -84,7 +84,7 @@ a{color:var(--accent)}
 </style>
 
 <div class="wrap">
-<h1>BT-MCP v0.2 外部接口规约</h1>
+<h1>BT-MCP v0.3 外部接口规约</h1>
 <p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-04</p>
 
 <p>本文面向要把 <strong>bt-mcp core</strong> 接到真实 GATT / SPP 通道上的宿主（Proxy/Host）开发者。core 自身零厂商假设、零 OS 依赖、无动态分配；宿主的全部职责集中在三件事：<strong>① 填通道能力结构体，② 提供一对 emit/送达回调，③ 驱动时钟（tick）</strong>。其余协议细节（分片、信用、状态机、JSON-RPC）由 core 内部消化。</p>
@@ -195,7 +195,7 @@ a{color:var(--accent)}
 </table>
 
 <div class="note warn">
-<strong>最易踩坑：</strong>framer 对每片 emit <strong>两次</strong>（6B 头一次、payload 一次），而 GATT notify 是 <em>hdr+payload 一体到达</em>。宿主若把 emit 直接落到 notify 队列，须在 emit 侧做片聚合（hdr 开新缓冲、payload 追加同缓冲），见 §7.2；或直接复用参考实现 <code>gatt_port.h</code>。
+<strong>v0.3 起：一个分片 = 一次 <code>emit</code> 调用</strong>（帧头与载荷已在 core 内拼好）。宿主直接把 <code>emit</code> 落到 GATT notify / SPP write 即可，无需再做片聚合——v0.2 的「hdr 一次、payload 一次」陷阱已消除。唯一例外是流通道上超过内部栈缓冲（约 261B）的大帧，会拆成「头+载荷」两次 emit，字节流语义下等价。
 </div>
 
 <h2 id="ctrl"><span class="no">4</span>控制帧</h2>
@@ -212,6 +212,18 @@ a{color:var(--accent)}
 </table>
 
 <p>宿主一般不直接构造控制帧——用 <code>bt_mcp_session_ctrl()</code> 发、由 <code>bt_mcp_session_rx()</code> 收并内部消化（见 §6.2）。</p>
+<p><span class="badge">v0.3</span> 新增两个控制帧，仅 <code>cap.reliable == 0</code> 的包通道使用：</p>
+<table>
+<tr><th>type</th><th>宏</th><th>参数</th><th>用途</th></tr>
+<tr><td>0x06</td><td><code>BT_MCP_CTRL_ACK</code></td><td>u8 seq</td><td>消息级确认，释放对端重传槽</td></tr>
+<tr><td>0x07</td><td><code>BT_MCP_CTRL_NACK</code></td><td>u8 seq | u8 idx</td><td>缺片补发请求，对端只重发该片</td></tr>
+</table>
+<p>可靠性语义：发送侧为每条 ≤<code>BT_MCP_CFG_TX_RETRY_BYTES</code> 的消息登记重传槽，
+<code>ack_tout_ms</code> 未确认则按原 seq 整条重发（最多 <code>retry_max</code> 次）；
+接收侧按 <code>seq+len+CRC32</code> 指纹去重（默认 2 条 / 5s 窗口），重复消息只回 ACK
+不再上抛。超出槽容量的消息不享重传保护（应用层或 resources 分页兜底）。</p>
+<p><span class="badge">v0.3</span> 信用改为闭环：每消费对端一条 MCP 消息自动回补
+1 credit（饱和 255），宿主无需手工发 CREDIT。</p>
 
 <h2 id="session"><span class="no">5</span>会话层 L4：状态机与状态门</h2>
 
@@ -321,7 +333,11 @@ emit 返回非 0（如 port 的 <code>E_NOMEM</code>）会透传给调用链（�
 
 <div class="sig">
 <div class="sig-h">int bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s, const bt_mcp_server_cfg_t *cfg, const char *fw_name, const char *fw_version)</div>
-<div class="sig-b"><p>挂上 session 与工具表。协议握手响应 <code>initialize</code> 自动应答：protocolVersion <code>2025-11-25</code>、serverName <code>bt-mcp-device</code>、serverVersion <code>0.2</code>。</p></div></div>
+<div class="sig-b"><p>挂上 session 与工具表/资源表。对 <code>initialize</code> 自动应答标准形态：
+<code>protocolVersion</code>（对端版本命中支持集则回显，否则回 <code>2025-11-25</code>）、
+<code>serverInfo:{name,version}</code>、<code>capabilities</code>、
+<code>_meta.io.btmcp.chan{kind,mtu,window,reliable,flow}</code>。
+收到 <code>notifications/initialized</code> 才会把 session 推 READY。</p></div></div>
 
 <div class="sig">
 <div class="sig-h">int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)</div>
@@ -354,7 +370,7 @@ uint32_t  bt_mcp_gatt_drain(bt_mcp_gatt_port_t *p, uint8_t *out, uint32_t len);<
 
 <h3>7.2 必须理解的判例：emit 双次调用 vs notify 一体到达</h3>
 
-<p>framer 对每片调用 emit <strong>两次</strong>（先 6B 帧头、后 payload）；真实 GATT 栈的一个 notify（或 write）承载的是 <em>hdr+payload 一体</em>。宿主接入时的两种正确姿势：</p>
+<p>v0.3 起 framer 每片只调用 <code>emit</code> <strong>一次</strong>，参数就是完整的<b>帧头+载荷</b>，与 GATT notify / SPP write 的承载单位一一对应。宿主直接把它投进发送队列即可：</p>
 
 <ol>
 <li><strong>片旁路聚合（HIL 实测配方）</strong>：emit 侧记录——收到 6B 头开新缓冲，payload 追加同缓冲；之后每个缓冲一次 <code>framer_feed</code>（= 一个 notify 一次喂入）。M4c 判例：mtu=23 时 84B 消息拆 ≥4 notify，逐 notify 直通 feed 重组成功。</li>
@@ -426,7 +442,7 @@ on_1ms_timer:    bt_mcp_session_tick(&amp;sess, now_ms);</code></pre>
 
 <table>
 <tr><th>method</th><th>方向</th><th>处理</th></tr>
-<tr><td><code>initialize</code></td><td>C→S</td><td>立即应答 capabilities（{server,client}）；serverName=bt-mcp-device / 0.2 / 2025-11-25</td></tr>
+<tr><td><code>initialize</code></td><td>C→S</td><td>应答 <code>protocolVersion</code>（协商回显）+ <code>serverInfo</code> + <code>capabilities</code> + <code>_meta.io.btmcp.chan</code></td></tr>
 <tr><td><code>notifications/initialized</code></td><td>C→S</td><td>通知（无 id）→ 置 <code>initialized=1</code>，会话进入全量态</td></tr>
 <tr><td><code>ping</code></td><td>C↔S</td><td>应答 <code>pong</code></td></tr>
 <tr><td><code>tools/list</code></td><td>C→S</td><td>返回工具表（name/desc/inputSchema/authz）</td></tr>
@@ -497,5 +513,7 @@ BT_MCP_E_IO     = -8   <span class="c">/* 底层 sink/transport 写失败 */</sp
 </ol>
 
 <hr style="margin-top:48px;border:none;border-top:1px solid var(--border)">
-<p class="meta">BT-MCP v0.2 草案全文见 <code>~/bt-mcp-core-draft.md</code>；源码 <code>~/bt-mcp/core</code> + <code>~/bt-mcp/port</code>。当前发布：1319 项协议差分检查 + 184 项 port HIL 全绿，fuzz 10 亿轮 ZERO CRASH（2026-11-04）。</p>
+<p class="meta">BT-MCP v0.3 草案全文见 <code>docs/bt-mcp-core-draft.md</code>；源码 <code>core/</code> + <code>port/</code>。
+当前发布：1339 项协议差分检查 + 184 项 port HIL + 63 项单元检查全绿，
+另有 ASan/UBSan 差分与独立 fuzz 引擎（2026-11-10）。</p>
 </div>

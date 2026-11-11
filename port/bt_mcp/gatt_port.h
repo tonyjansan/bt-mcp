@@ -21,7 +21,9 @@ static inline int bt_mcp_gatt_port_init(bt_mcp_gatt_port_t *p, uint16_t att_mtu)
     memset(p, 0, sizeof *p);
     p->cap.kind = BT_MCP_CHAN_PACKET;
     p->cap.mtu = (uint16_t)(att_mtu - 3);   /* ATT 头 3B 预扣（GATT 判例） */
-    p->cap.reliable = 1;
+    /* GATT notify 是「有 MTU、可能丢、无跨包边界保证」的包通道（草案 §3）：
+     * reliable=0 让 L4 打开消息级 ACK/NACK 重传与接收去重。 */
+    p->cap.reliable = 0;
     p->cap.flow_ctrl = 0;
     p->cap.max_pending = 4;
     return p->cap.mtu < 20 ? BT_MCP_E_ARGS : BT_MCP_OK;

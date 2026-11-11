@@ -104,6 +104,9 @@ struct bt_mcp_session {
     uint32_t       stat_tx_dropped;
     uint32_t       stat_rx_dup;
     uint32_t       now_ms;
+    /* session_feed 期间暂存的上抛目标（单写者模型，非重入） */
+    bt_mcp_mcp_sink_t feed_sink;
+    void             *feed_user;
 };
 
 typedef struct bt_mcp_session bt_mcp_session_t;
@@ -131,6 +134,11 @@ int  bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len);
 /* 发送控制帧（RESUME/信用补给），绕过状态门的部分内部自理 */
 int  bt_mcp_session_ctrl(bt_mcp_session_t *s, uint8_t type,
                          const uint8_t *args, uint8_t args_len);
+/* 直接投喂原始字节：内部完成 framer 重组 → session_rx（供 port 的
+ * 「收到数据」回调一行调用；等价于自己接 framer_feed + session_rx）。 */
+int  bt_mcp_session_feed(bt_mcp_session_t *s, const uint8_t *in, uint16_t len,
+                         bt_mcp_mcp_sink_t sink, void *user);
+
 /* 泵：冲掉待发 NACK、到期整条重传。port 在每次 feed 之后与主循环节拍调用。 */
 int  bt_mcp_session_pump(bt_mcp_session_t *s);
 

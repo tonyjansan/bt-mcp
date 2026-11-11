@@ -45,7 +45,17 @@ int bt_mcp_json_parse(const char *src, uint32_t len, bt_mcp_json_req_t *out);
 int bt_mcp_json_get_str(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint16_t *len);
 int bt_mcp_json_get_u32(const bt_mcp_json_req_t *r, const char *key, uint32_t *out);
+/* 有符号整数（JSON-RPC error.code 等为负值） */
+int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *out);
 int bt_mcp_json_get_raw(const bt_mcp_json_req_t *r, const char *key,
+                        const char **out, uint32_t *len);
+
+/* 宽松形态解析：允许没有 method（响应报文）。客户端/响应侧用。
+ * 与 bt_mcp_json_parse 的唯一差异就在「必须有 method」这条校验上。 */
+int bt_mcp_json_parse_msg(const char *src, uint32_t len, bt_mcp_json_req_t *out);
+
+/* 在「整个请求对象」顶层查找键（响应解析用：result / error） */
+int bt_mcp_json_top_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len);
 
 /* 把 params 内 key 对应的对象值嫁接成子请求（sub->params = 该对象片段）。

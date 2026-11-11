@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 3 * * 1'        # 每周一长跑（随机轮数放大 + ASan）
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          cc --version | head -1
+          cargo --version
+          python3 --version
+
+      - name: Build + all suites (diff / HIL / unit / tiers)
+        run: ./build.sh 200
+
+      - name: ASan + UBSan differencial runs
+        run: ./build.sh 100 asan
+
+      - name: Fuzz (1e7 rounds, crash-only gate)
+        run: |
+          cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
+             core/src/frame.c -o build/fuzz_frame
+          ./build/fuzz_frame 10000000
+
+  long-run:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Long differential soak
+        run: ./build.sh 5000

@@ -5,6 +5,9 @@
 #ifndef BT_MCP_CONFIG_H
 #define BT_MCP_CONFIG_H
 
+/* 档位（可选）：定义 BT_MCP_TIER 即一键设定容量，逐项 #ifndef 仍可覆盖 */
+#include "tier.h"
+
 /* ---- 接收面 ---- */
 #ifndef BT_MCP_CFG_MAX_REASM
 #define BT_MCP_CFG_MAX_REASM     4      /* 重组槽数 */

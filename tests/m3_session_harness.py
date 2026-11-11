@@ -17,7 +17,7 @@ import sys
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MOCK = os.path.join(ROOT, "build", "btmcp_mock")
+MOCK = os.environ.get("BT_MCP_MOCK") or os.path.join(ROOT, "build", "btmcp_mock")
 ORACLE = os.path.join(ROOT, "oracle", "target", "release", "oracle")
 
 CTRL_CREDIT = 1

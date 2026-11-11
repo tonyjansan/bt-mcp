@@ -400,6 +400,26 @@ uint32_t bt_mcp_session_rtt(const bt_mcp_session_t *s, int *valid)
     return s ? s->rtt_ms : 0;
 }
 
+/* framer 上抛 → session_rx（session_feed 的内部 sink） */
+static void feed_trampoline(void *user, uint8_t kind, uint8_t seq,
+                            const uint8_t *payload, uint16_t len)
+{
+    bt_mcp_session_t *s = user;
+    (void)bt_mcp_session_rx(s, kind, seq, payload, len, s->feed_sink, s->feed_user);
+}
+
+int bt_mcp_session_feed(bt_mcp_session_t *s, const uint8_t *in, uint16_t len,
+                        bt_mcp_mcp_sink_t sink, void *user)
+{
+    if (!s || !s->fr) return BT_MCP_E_ARGS;
+    s->feed_sink = sink;
+    s->feed_user = user;
+    int rc = bt_mcp_framer_feed(s->fr, in, len, feed_trampoline, s);
+    s->feed_sink = NULL;
+    s->feed_user = NULL;
+    return rc;
+}
+
 int bt_mcp_session_pump(bt_mcp_session_t *s)
 {
     if (!s || !s->fr) return BT_MCP_E_ARGS;
