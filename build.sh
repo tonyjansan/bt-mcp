@@ -33,6 +33,12 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    core/src/writer.c core/src/mcp_server.c -o build/test_m2
 ./build/test_m2
 
+echo "== 可靠性定向测试（丢片/重传/去重/槽回收） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_reliability.c core/src/frame.c core/src/session.c \
+   -o build/test_reliability
+./build/test_reliability
+
 echo "== Bridge 客户端端到端（client L5 ↔ server L5） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_client.c core/src/frame.c core/src/session.c core/src/json.c \
@@ -47,6 +53,11 @@ for tier in BT_MCP_TIER_COMPACT BT_MCP_TIER_STANDARD; do
        core/src/writer.c core/src/mcp_server.c -o build/test_m2_$tier
     ./build/test_m2_$tier > /dev/null && echo "  $tier OK"
 done
+
+echo "== 开销基线（参考值，不影响判定） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tools/bench.c core/src/frame.c core/src/session.c -o build/bench
+./build/bench | head -8
 
 echo "== diff harness =="
 python3 tests/diff_harness.py "$ROUNDS"

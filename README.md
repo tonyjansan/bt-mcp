@@ -15,8 +15,8 @@ M1–M4 完成，v0.3 补齐了「能接真实 MCP Host」的全部缺口：
 | L5 | `core/src/mcp_server.c` | 标准 MCP 握手（serverInfo/_meta）、tools+resources 分页、异步/进度/取消 |
 | port | `port/bt_mcp/` | GATT（包/不可靠）、SPP（流/可靠）、L2CAP CoC（包/可靠/自带流控） |
 
-回归基线（`./build.sh`）：**1339 protocol diff checks + 184 port HIL checks
-+ 63 unit checks，全绿**，另有 ASan/UBSan 版差分与独立 fuzz 引擎。
+回归基线（`./build.sh`）：**1339 protocol diff checks + 198 port HIL checks
++ 106 unit checks（63 核心 + 22 可靠性 + 21 Bridge 客户端），全绿**，另有 ASan/UBSan 版差分与独立 fuzz 引擎。
 
 v0.3 相对 v0.2 的实质修复：
 
