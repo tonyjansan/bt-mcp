@@ -15,12 +15,12 @@ static int put_lit(bt_mcp_writer_t *w, const char *s)
     return bt_mcp_w_raw(w, s, (uint32_t)strlen(s));
 }
 
-int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s)
+int bt_mcp_w_str_n(bt_mcp_writer_t *w, const char *s, uint32_t n)
 {
-    int rc = put_lit(w, "\"");
     static const char HEX[] = "0123456789abcdef";
-    for (const char *p = s ? s : ""; *p && !rc; p++) {
-        unsigned char c = (unsigned char)*p;
+    int rc = put_lit(w, "\"");
+    for (uint32_t i = 0; !rc && i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
         char esc[8];
         switch (c) {
         case '"':  esc[0] = '\\'; esc[1] = '"';  rc = bt_mcp_w_raw(w, esc, 2); break;
@@ -41,31 +41,59 @@ int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s)
     return rc ? rc : put_lit(w, "\"");
 }
 
-int bt_mcp_w_begin_result(bt_mcp_writer_t *w, int64_t id)
+int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s)
 {
-    /* buf 须容纳 i64 最长 20 位：26 前缀+20+11 后缀=57（M4a 根修：
-       buf[40] 时 snprintf 截断但按返回值 n 写出 → 栈越界读）。 */
-    char buf[64];
-    int n = snprintf(buf, sizeof buf, "{\"jsonrpc\":\"2.0\",\"id\":%lld,\"result\":{",
-                     (long long)id);
-    if (n < 0) return BT_MCP_E_ARGS;
-    w->need_comma = 0;
+    if (!s) s = "";
+    return bt_mcp_w_str_n(w, s, (uint32_t)strlen(s));
+}
+
+/* id 写出：字符串 id 用 "…" 包裹原文段（原文段已含转义，直接透传即合法 JSON） */
+static int put_id(bt_mcp_writer_t *w, int64_t id, const char *id_str, uint16_t id_len)
+{
+    char buf[32];
+    if (id_str) {
+        int rc = put_lit(w, "\"");
+        if (!rc) rc = bt_mcp_w_raw(w, id_str, id_len);
+        return rc ? rc : put_lit(w, "\"");
+    }
+    int n = snprintf(buf, sizeof buf, "%lld", (long long)id);
+    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
     return bt_mcp_w_raw(w, buf, (uint32_t)n);
 }
 
-int bt_mcp_w_begin_error(bt_mcp_writer_t *w, int64_t id,
-                         int code, const char *message)
+int bt_mcp_w_begin_result_id(bt_mcp_writer_t *w, int64_t id,
+                             const char *id_str, uint16_t id_len)
 {
-    /* 同 begin_result：i64 最长 20 位需 43+ 字节，buf[32] 越界读根修 */
-    char buf[64];
-    int n = snprintf(buf, sizeof buf, "{\"jsonrpc\":\"2.0\",\"id\":%lld,", (long long)id);
-    int rc = bt_mcp_w_raw(w, buf, (uint32_t)n);
-    if (!rc) rc = put_lit(w, "\"error\":{\"code\":");
-    n = snprintf(buf, sizeof buf, "%d", code);
+    int rc = put_lit(w, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (!rc) rc = put_id(w, id, id_str, id_len);
+    w->need_comma = 0;
+    return rc ? rc : put_lit(w, ",\"result\":{");
+}
+
+int bt_mcp_w_begin_result(bt_mcp_writer_t *w, int64_t id)
+{
+    return bt_mcp_w_begin_result_id(w, id, NULL, 0);
+}
+
+int bt_mcp_w_begin_error_id(bt_mcp_writer_t *w, int64_t id,
+                            const char *id_str, uint16_t id_len,
+                            int code, const char *message)
+{
+    char buf[16];
+    int rc = put_lit(w, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (!rc) rc = put_id(w, id, id_str, id_len);
+    if (!rc) rc = put_lit(w, ",\"error\":{\"code\":");
+    int n = snprintf(buf, sizeof buf, "%d", code);
+    if (!rc && (n < 0 || (size_t)n >= sizeof buf)) rc = BT_MCP_E_ARGS;
     if (!rc) rc = bt_mcp_w_raw(w, buf, (uint32_t)n);
     if (!rc) rc = put_lit(w, ",\"message\":");
     if (!rc) rc = bt_mcp_w_str_lit(w, message);
     return rc ? rc : put_lit(w, "}}");
+}
+
+int bt_mcp_w_begin_error(bt_mcp_writer_t *w, int64_t id, int code, const char *message)
+{
+    return bt_mcp_w_begin_error_id(w, id, NULL, 0, code, message);
 }
 
 int bt_mcp_w_end(bt_mcp_writer_t *w)
@@ -100,6 +128,14 @@ int bt_mcp_w_kv_u32(bt_mcp_writer_t *w, const char *key, uint32_t v)
 {
     char buf[24];
     int n = snprintf(buf, sizeof buf, "%lu", (unsigned long)v);
-    int rc = bt_mcp_w_kv_raw(w, key, buf, (uint32_t)(n > 0 ? n : 0));
-    return n < 0 ? BT_MCP_E_ARGS : rc;
+    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
+    return bt_mcp_w_kv_raw(w, key, buf, (uint32_t)n);
+}
+
+int bt_mcp_w_kv_u64(bt_mcp_writer_t *w, const char *key, uint64_t v)
+{
+    char buf[32];
+    int n = snprintf(buf, sizeof buf, "%llu", (unsigned long long)v);
+    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
+    return bt_mcp_w_kv_raw(w, key, buf, (uint32_t)n);
 }

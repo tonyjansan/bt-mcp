@@ -1,7 +1,16 @@
 /* bt_mcp/session.h —— L4 会话层（草案 §5.1/§7）。
  * 状态机 IDLE→LINK_UP→READY；READY 前只收控制帧与 initialize；
  * 包通道信用窗口约束发送；RESUME token 绑定 bond。
- * 纯 C99、非阻塞、无 OS 依赖；时间一律由调用方传入。 */
+ * 纯 C99、非阻塞、无 OS 依赖；时间一律由调用方传入。
+ *
+ * v0.3 变更：
+ *  - 信用闭环：每消费一条对端消息自动回补 1 credit（饱和到 255），
+ *    不再依赖应用层手工 session_ctrl(CREDIT)；
+ *  - 不可靠包通道消息级可靠：发送重传槽环 + ACK 确认 + NACK 单片重传 +
+ *    超时整条重传 + 接收侧窗口去重（CRC32 指纹，零额外消息缓冲）；
+ *  - RESUME 防爆破：连续失败进入指数退避锁定，token 比较常数时间；
+ *  - PING 关联与 RTT 测量。
+ */
 #ifndef BT_MCP_SESSION_H
 #define BT_MCP_SESSION_H
 
@@ -18,15 +27,42 @@ typedef enum {
 #define BT_MCP_ROLE_SERVER 0
 #define BT_MCP_ROLE_CLIENT 1
 
+/* RESUME_REJ reason 码 */
+#define BT_MCP_REJ_NO_TOKEN 1
+#define BT_MCP_REJ_MISMATCH 2
+#define BT_MCP_REJ_LOCKED   3
+
 typedef struct {
     uint32_t req_timeout_ms;    /* 在途请求超时（默认 30000） */
     uint32_t resume_tout_ms;    /* RESUME_REQ 等待 RESUME_OK/REJ 超时（默认 5000） */
     uint8_t  tx_window;         /* 包通道应用层信用初值（=对端重组槽数） */
     uint8_t  role;              /* BT_MCP_ROLE_* */
+    /* ---- v0.3 追加（既有 4 字段位置不变，新字段追加在尾部）---- */
+    uint8_t  retry_max;         /* 每条消息重传次数上限；0=用 BT_MCP_CFG_MAX_RETRY */
+    uint16_t ack_tout_ms;       /* 等 ACK 时限；0=用 BT_MCP_CFG_ACK_TOUT_MS */
 } bt_mcp_session_cfg_t;
 
 /* 上抛给 L5 的回调（session 已滤好状态/信用，L5 只管 MCP 语义） */
 typedef void (*bt_mcp_mcp_sink_t)(void *user, const uint8_t *json, uint32_t len);
+
+/* 发送重传槽：仅不可靠包通道使用。消息 ≤ slot 容量才受保护。 */
+struct bt_mcp_tx_slot {
+    uint8_t  valid;
+    uint8_t  seq;              /* 该消息的帧头 seq（ACK/NACK 匹配键） */
+    uint8_t  n;                /* 已重传次数 */
+    uint16_t len;
+    uint32_t t0;               /* 最近一次发出时刻（ACK 超时基准） */
+    uint8_t  buf[BT_MCP_CFG_TX_RETRY_BYTES];
+};
+
+/* 接收去重窗口项：只存指纹，不存消息体（大消息也不额外吃 RAM） */
+struct bt_mcp_rx_fp {
+    uint8_t  valid;
+    uint8_t  seq;
+    uint16_t len;
+    uint32_t crc;
+    uint32_t t;
+};
 
 struct bt_mcp_session {
     bt_mcp_session_cfg_t cfg;
@@ -43,9 +79,30 @@ struct bt_mcp_session {
     uint32_t       resume_token;  /* 本端持有的会话恢复令牌（绑 bond） */
     uint8_t        resume_pending;
     uint32_t       resume_t0;
+    /* RESUME 防爆破 */
+    uint8_t        resume_fail;      /* 连续失败次数 */
+    uint8_t        resume_locked;    /* 1 = 锁定窗口内 */
+    uint32_t       resume_lock_t0;   /* 锁定起始时刻 */
+    uint32_t       resume_lock_ms;   /* 本次锁定时长 */
     /* 在途请求超时记账（最简形式：单槽时间戳） */
     uint32_t       req_t0;
     uint8_t        req_inflight;
+    /* PING 关联 */
+    uint8_t        ping_pending;
+    uint8_t        ping_epoch;
+    uint32_t       ping_t0;
+    uint32_t       rtt_ms;           /* 最近一次测量值 */
+    uint8_t        rtt_valid;
+    /* ---- v0.3：不可靠包通道的发送重传槽环 ---- */
+    struct bt_mcp_tx_slot txslot[BT_MCP_CFG_TX_SLOTS];
+    uint8_t        txslot_next;      /* 环形替换指针 */
+    /* ---- v0.3：接收去重指纹窗口 ---- */
+    struct bt_mcp_rx_fp rx_fp[BT_MCP_CFG_RX_FP_SLOTS];
+    uint8_t        rx_fp_next;
+    /* 统计（port/应用可读） */
+    uint32_t       stat_tx_retransmit;
+    uint32_t       stat_tx_dropped;
+    uint32_t       stat_rx_dup;
     uint32_t       now_ms;
 };
 
@@ -59,12 +116,14 @@ bt_mcp_state_t bt_mcp_session_state(const bt_mcp_session_t *s);
 
 /* port 在连接建立时调用（cap 已在 framer 绑定时注入） */
 void bt_mcp_session_link_up(bt_mcp_session_t *s, uint32_t resume_token);
+/* MCP 握手完成（收到 notifications/initialized）：LINK_UP → READY */
+void bt_mcp_session_mark_ready(bt_mcp_session_t *s);
 /* port 在断链时调用：作废在途映射；bond 丢失则 token 一并作废 */
 void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact);
 
 /* 下行：framer 上抛的完整消息（kind = BT_MCP_KIND_MCP/CTRL）。
- * 内部处理控制帧（信用/RESUME/状态门），MCP 消息转 mcp_sink。 */
-int  bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind,
+ * 内部处理控制帧（信用/RESUME/ACK/NACK/状态门），MCP 消息转 mcp_sink。 */
+int  bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
                        const uint8_t *payload, uint16_t len,
                        bt_mcp_mcp_sink_t mcp_sink, void *user);
 /* 上行：L5 要发的完整 MCP 消息；受信用窗口约束，可能 E_AGAIN */
@@ -72,6 +131,13 @@ int  bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len);
 /* 发送控制帧（RESUME/信用补给），绕过状态门的部分内部自理 */
 int  bt_mcp_session_ctrl(bt_mcp_session_t *s, uint8_t type,
                          const uint8_t *args, uint8_t args_len);
+/* 泵：冲掉待发 NACK、到期整条重传。port 在每次 feed 之后与主循环节拍调用。 */
+int  bt_mcp_session_pump(bt_mcp_session_t *s);
+
+/* PING：发起一次带 epoch 的探针；对端自动 PONG；RTT 在后续消息/tick 里换算 */
+int  bt_mcp_session_ping(bt_mcp_session_t *s, uint8_t epoch);
+/* 最近一次 RTT（ms）；*valid=0 表示尚无样本 */
+uint32_t bt_mcp_session_rtt(const bt_mcp_session_t *s, int *valid);
 
 void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms);
 

@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include "bt_mcp/frame.h"
 #include "bt_mcp/session.h"
 #include "bt_mcp/mcp_server.h"
@@ -49,15 +50,17 @@ static int vec_emit(void *io, const uint8_t *data, uint16_t len)
 /* msg sink：包通道差分时每片需带「u16 片长前缀」——由 harness 在两片之间插。
    这里只把消息记入数组（差分比对的输出格式在 main 里拼）。 */
 #define MAX_OUT_MSGS 64
-static struct { uint8_t kind; uint16_t len; uint8_t buf[BT_MCP_CFG_MAX_MSG]; }
+static struct { uint8_t kind; uint8_t seq; uint16_t len; uint8_t buf[BT_MCP_CFG_MAX_MSG]; }
     g_msgs[MAX_OUT_MSGS];
 static int g_nmsgs;
 
-static void sink_msg(void *user, uint8_t kind, const uint8_t *payload, uint16_t len)
+static void sink_msg(void *user, uint8_t kind, uint8_t seq,
+                     const uint8_t *payload, uint16_t len)
 {
     (void)user;
     if (g_nmsgs >= MAX_OUT_MSGS || len > BT_MCP_CFG_MAX_MSG) return;
     g_msgs[g_nmsgs].kind = kind;
+    g_msgs[g_nmsgs].seq = seq;
     g_msgs[g_nmsgs].len = len;
     if (len) memcpy(g_msgs[g_nmsgs].buf, payload, len);
     g_nmsgs++;
@@ -102,20 +105,55 @@ static int run_session(const uint8_t *in, size_t in_len);
 static int run_mcp(const uint8_t *in, size_t in_len);
 static int run_e2e(const uint8_t *in, size_t in_len);
 
-/* echo 工具：回显 params.text（get_str "text"），缺失回错 */
-static int tool_echo(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *user)
+/* echo 工具：把 params.text 原文写进 content（server 负责转义），缺失回错 */
+static int tool_echo(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w,
+                     bt_mcp_call_t *call, void *user)
 {
-    (void)user;
+    (void)call; (void)user;
     const char *text; uint16_t tl;
     if (bt_mcp_json_get_str(r, "text", &text, &tl))
         return BT_MCP_E_PARSE;
-    /* 零拷贝片段无 NUL 终止，w_str_lit 按 C 串读——先落定长缓冲 */
-    char buf[256];
-    if (tl >= sizeof buf) tl = sizeof buf - 1;
-    memcpy(buf, text, tl);
-    buf[tl] = 0;
-    return bt_mcp_w_str_lit(w, buf);
+    /* 解转义后按原文输出（server 负责 JSON 转义）；超 MAX_MSG 截断 */
+    static char buf[BT_MCP_CFG_MAX_MSG];
+    uint16_t need = 0;
+    uint16_t n = bt_mcp_json_decode_str(text - 1, text + tl + 1, buf,
+                                        sizeof buf - 1, &need);
+    (void)need;
+    return bt_mcp_w_raw(w, buf, n);
 }
+
+/* ---- 资源表（差分固定面：与 oracle 逐字节同形） ---- */
+typedef struct { const char *text; uint32_t len; uint32_t page; } res_src_t;
+
+static int res_read(void *user, uint32_t cursor, const char **text,
+                    uint32_t *len, uint32_t *next)
+{
+    const res_src_t *s = user;
+    if (cursor >= s->len) {
+        *text = ""; *len = 0; *next = BT_MCP_CURSOR_END;
+        return 0;
+    }
+    uint32_t n = s->len - cursor;
+    if (s->page && n > s->page) n = s->page;
+    *text = s->text + cursor;
+    *len = n;
+    uint32_t nx = cursor + n;
+    *next = (nx < s->len) ? nx : BT_MCP_CURSOR_END;
+    return 0;
+}
+
+static const char RES_HR[]  = "hello resource";
+static const char RES_LOG[] = "0123456789ABCDEFGHIJ";
+static const res_src_t RES_HR_SRC  = { RES_HR,  sizeof RES_HR  - 1, 0 };
+static const res_src_t RES_LOG_SRC = { RES_LOG, sizeof RES_LOG - 1, 8 };
+
+static const bt_mcp_resource_def_t MOCK_RES[] = {
+    { "hr_window", "heart rate window", "text/plain",
+      BT_MCP_AUTHZ_OPEN, res_read, (void *)&RES_HR_SRC },
+    { "log", "device log", "text/plain",
+      BT_MCP_AUTHZ_OPEN, res_read, (void *)&RES_LOG_SRC },
+};
+#define MOCK_RES_COUNT ((uint16_t)(sizeof MOCK_RES / sizeof MOCK_RES[0]))
 
 int main(int argc, char **argv)
 {
@@ -259,7 +297,7 @@ static int rx_wire(bt_mcp_session_t *se, bt_mcp_framer_t *fr,
          * MCP 消息经状态门后上抛（mcp_up 记录）。 */
         for (int i = 0; i < g_nmsgs; i++) {
             step_out_t *st = &g_step;
-            int rc = bt_mcp_session_rx(se, g_msgs[i].kind,
+            int rc = bt_mcp_session_rx(se, g_msgs[i].kind, g_msgs[i].seq,
                                        g_msgs[i].buf, g_msgs[i].len,
                                        g_msgs[i].kind == BT_MCP_KIND_CTRL
                                            ? NULL : mcp_up, st);
@@ -271,6 +309,7 @@ static int rx_wire(bt_mcp_session_t *se, bt_mcp_framer_t *fr,
         }
         g_nmsgs = 0;
     }
+    bt_mcp_session_pump(se);     /* 冲待发 NACK（缺片） */
     return last_rx_rc;
 }
 
@@ -284,11 +323,14 @@ static int run_session(const uint8_t *in, size_t in_len)
     static bt_mcp_session_t se;
     bt_mcp_chan_cap_t cap = { .kind = chan ? BT_MCP_CHAN_PACKET
                                           : BT_MCP_CHAN_STREAM,
-                              .mtu = mtu, .reliable = 1, .flow_ctrl = 0,
+                              .mtu = mtu,
+                              .reliable = chan ? 0 : 1,   /* GATT 包通道不可靠 */
+                              .flow_ctrl = chan ? 0 : 1,
                               .max_pending = 4 };
     bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
     if (bt_mcp_framer_init(&fr, &fcfg, &cap)) return 2;
-    bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, BT_MCP_ROLE_CLIENT };
+    bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                  .tx_window = 4, .role = BT_MCP_ROLE_CLIENT };
     if (bt_mcp_session_init(&se, &scfg)) return 2;
     bt_mcp_session_bind(&se, &fr, vec_emit, &g_step.wire);
 
@@ -385,17 +427,21 @@ static int run_mcp(const uint8_t *in, size_t in_len)
     static bt_mcp_server_t sv;
     bt_mcp_chan_cap_t cap = { .kind = chan ? BT_MCP_CHAN_PACKET
                                            : BT_MCP_CHAN_STREAM,
-                              .mtu = mtu, .reliable = 1, .flow_ctrl = 0,
+                              .mtu = mtu,
+                              .reliable = chan ? 0 : 1,   /* GATT 包通道不可靠 */
+                              .flow_ctrl = chan ? 0 : 1,
                               .max_pending = 4 };
     bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
     if (bt_mcp_framer_init(&fr, &fcfg, &cap)) return 2;
-    bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, BT_MCP_ROLE_SERVER };
+    bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                  .tx_window = 4, .role = BT_MCP_ROLE_SERVER };
     if (bt_mcp_session_init(&se, &scfg)) return 2;
     bt_mcp_session_bind(&se, &fr, vec_emit, &g_step.wire);
-    bt_mcp_session_link_up(&se, 0);
-    se.state = BT_MCP_S_LINK_UP;      /* server 端：等 initialize */
-    bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count };
-    if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.2")) return 2;
+    bt_mcp_session_link_up(&se, 0);   /* server 端：LINK_UP 等 initialize */
+    bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count,
+                                  .resources = MOCK_RES,
+                                  .resources_count = MOCK_RES_COUNT };
+    if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.3")) return 2;
 
     int32_t rc = 0;
     while (off < in_len) {
@@ -429,6 +475,16 @@ static int run_mcp(const uint8_t *in, size_t in_len)
  *   0x08/0x0A/0x0B/0x0C 的 nmsgs 恒 0。
  * 交叉链路：Cmsg→(server rx)→server 响应→(client rx)→client 上抛消息
  * 经 sink 记录后直接丢弃——客户端应用层逻辑不在差分面内。 */
+
+/* e2e server 侧桥：session 上抛的 MCP 消息转 server_rx（保持 ACK/信用闭环） */
+static bt_mcp_server_t *g_pump_sv;
+static int g_pump_sink_rc;
+static void pump_srv_sink(void *user, const uint8_t *json, uint32_t len)
+{
+    (void)user;
+    g_pump_sink_rc = bt_mcp_server_rx(g_pump_sv, json, len);
+}
+
 static vec_t e_c2s, e_s2c;   /* 交叉线缓冲：c2s=client→server，s2c=server→client */
 
 /* 泵空一条线：wire → 对端 framer → session_rx；上抛 MCP 消息逐条记录。
@@ -455,7 +511,7 @@ static int pump_line(bt_mcp_session_t *dst, bt_mcp_framer_t *fr, vec_t *w)
             off = w->len;
         }
         for (int i = 0; i < g_nmsgs; i++) {
-            int rc = bt_mcp_session_rx(dst, g_msgs[i].kind,
+            int rc = bt_mcp_session_rx(dst, g_msgs[i].kind, g_msgs[i].seq,
                                       g_msgs[i].buf, g_msgs[i].len,
                                       g_msgs[i].kind == BT_MCP_KIND_CTRL
                                           ? NULL : mcp_up, &g_step);
@@ -464,6 +520,7 @@ static int pump_line(bt_mcp_session_t *dst, bt_mcp_framer_t *fr, vec_t *w)
         }
         g_nmsgs = 0;
     }
+    bt_mcp_session_pump(dst);
     return last_rc;
 }
 
@@ -500,19 +557,18 @@ static int pump_all(bt_mcp_session_t *cs, bt_mcp_framer_t *cfr,
                     off = tmp.len;
                 }
                 for (int i = 0; i < g_nmsgs; i++) {
-                    if (g_msgs[i].kind == BT_MCP_KIND_CTRL) {
-                        last_rc = bt_mcp_session_rx(ss, BT_MCP_KIND_CTRL,
-                                                    g_msgs[i].buf, g_msgs[i].len,
-                                                    NULL, NULL);
-                    } else {
-                        last_rc = bt_mcp_server_rx(sv, g_msgs[i].buf,
-                                                    g_msgs[i].len);
-                    }
+                    g_pump_sink_rc = 0;
+                    last_rc = bt_mcp_session_rx(ss, g_msgs[i].kind,
+                                                g_msgs[i].seq,
+                                                g_msgs[i].buf, g_msgs[i].len,
+                                                pump_srv_sink, sv);
+                    if (g_pump_sink_rc) last_rc = g_pump_sink_rc;
                     if (last_rc) break;
                 }
                 g_nmsgs = 0;
                 if (last_rc && last_rc != BT_MCP_OK) break;
             }
+            bt_mcp_session_pump(ss);
             if (last_rc && last_rc != BT_MCP_OK) return last_rc;
             continue;
         }
@@ -561,21 +617,28 @@ static int run_e2e(const uint8_t *in, size_t in_len)
     static bt_mcp_server_t sv;
     bt_mcp_chan_cap_t cap = { .kind = chan ? BT_MCP_CHAN_PACKET
                                           : BT_MCP_CHAN_STREAM,
-                              .mtu = mtu, .reliable = 1, .flow_ctrl = 0,
+                              .mtu = mtu,
+                              .reliable = chan ? 0 : 1,   /* GATT 包通道不可靠 */
+                              .flow_ctrl = chan ? 0 : 1,
                               .max_pending = 4 };
     bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
     if (bt_mcp_framer_init(&cfr, &fcfg, &cap)) return 2;
     if (bt_mcp_framer_init(&sfr, &fcfg, &cap)) return 2;
-    bt_mcp_session_cfg_t ccfg = { 30000, 5000, 4, BT_MCP_ROLE_CLIENT };
-    bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, BT_MCP_ROLE_SERVER };
+    bt_mcp_session_cfg_t ccfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                  .tx_window = 4, .role = BT_MCP_ROLE_CLIENT };
+    bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                  .tx_window = 4, .role = BT_MCP_ROLE_SERVER };
     if (bt_mcp_session_init(&cs, &ccfg)) return 2;
     if (bt_mcp_session_init(&ss, &scfg)) return 2;
     /* client emit → c2s 线；server emit → s2c 线 */
     bt_mcp_session_bind(&cs, &cfr, vec_emit, &e_c2s);
     bt_mcp_session_bind(&ss, &sfr, vec_emit, &e_s2c);
-    bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count };
-    if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.2")) return 2;
+    bt_mcp_server_cfg_t sv_cfg = { .tools = tools, .tools_count = tools_count,
+                                  .resources = MOCK_RES,
+                                  .resources_count = MOCK_RES_COUNT };
+    if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.3")) return 2;
 
+    g_pump_sv = &sv;
     memset(&e_c2s, 0, sizeof e_c2s);
     memset(&e_s2c, 0, sizeof e_s2c);
     int32_t rc = 0;

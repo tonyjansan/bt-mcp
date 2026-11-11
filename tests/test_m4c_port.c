@@ -40,9 +40,10 @@ static int emit_log_gatt(void *io, const uint8_t *d, uint16_t n)
 }
 
 static int msg_count;
-static void count_sink(void *u, uint8_t kind, const uint8_t *b, uint16_t l)
+static void count_sink(void *u, uint8_t kind, uint8_t seq,
+                       const uint8_t *b, uint16_t l)
 {
-    (void)u; (void)kind; (void)b; (void)l;
+    (void)u; (void)kind; (void)seq; (void)b; (void)l;
     msg_count++;
 }
 
@@ -60,7 +61,8 @@ static int ep_init(struct endpoint *e, int is_gatt, uint16_t att_mtu,
     memset(e, 0, sizeof *e);
     e->is_gatt = is_gatt;
     bt_mcp_frame_cfg_t fcfg = { .max_reasm = 4, .frag_tout_ms = 2000 };
-    bt_mcp_session_cfg_t scfg = { 30000, 5000, 4, role };
+    bt_mcp_session_cfg_t scfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                  .tx_window = 4, .role = (uint8_t)role };
     int rc;
     if (is_gatt) {
         if ((rc = bt_mcp_gatt_port_init(&e->gp, att_mtu)) != 0) return rc;

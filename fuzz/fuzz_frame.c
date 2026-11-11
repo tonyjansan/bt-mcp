@@ -32,7 +32,8 @@ static int vec_emit(void *io, const uint8_t *data, uint16_t len)
     return 0;
 }
 
-static void vec_sink(void *user, uint8_t kind, const uint8_t *payload, uint16_t len)
+static void vec_sink(void *user, uint8_t kind, uint8_t seq,
+                     const uint8_t *payload, uint16_t len)
 {
     vec_t *v = user;
     (void)kind;

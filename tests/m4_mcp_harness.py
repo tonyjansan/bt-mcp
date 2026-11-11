@@ -157,6 +157,55 @@ def s_packet_fragment(rng):
 
 
 @scenario
+def s_resources(rng):
+    """resources/list 与 resources/read（含 cursor 分页与未知 uri）。"""
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":2,"method":"resources/list"}',
+        b'{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"bt-mcp://dev/log"}}',
+        b'{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"bt-mcp://dev/log?cursor=8"}}',
+        b'{"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":"bt-mcp://dev/log?cursor=16"}}',
+        b'{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"bt-mcp://dev/hr_window"}}',
+        b'{"jsonrpc":"2.0","id":7,"method":"resources/read","params":{"uri":"bt-mcp://dev/nope"}}',
+        b'{"jsonrpc":"2.0","id":8,"method":"resources/read","params":{}}',
+        b'{"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":123}}',
+        b'{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"bt-mcp://dev/log","cursor":"8"}}',
+    ]
+    return script(0, 0, [(b"echo", b"e")], msgs)
+
+
+@scenario
+def s_tools_pagination(rng):
+    """工具数超过一页（PAGE_SIZE=8）→ nextCursor 分页。"""
+    tools = [(b"t%02d" % i, b"desc%d" % i) for i in range(10)]
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+        b'{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"cursor":"8"}}',
+        b'{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"cursor":"99"}}',
+    ]
+    return script(0, 0, tools, msgs)
+
+
+@scenario
+def s_string_ids(rng):
+    """字符串 id 原样回显（含转义与边界）。"""
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":"a","method":"ping"}',
+        b'{"jsonrpc":"2.0","id":"","method":"ping"}',
+        b'{"jsonrpc":"2.0","id":"a\"b","method":"ping"}',
+        b'{"jsonrpc":"2.0","id":"\\u4e2d","method":"tools/list"}',
+        b'{"jsonrpc":"2.0","id":"x","method":"bogus"}',
+    ]
+    return script(0, 0, [(b"echo", b"e")], msgs)
+
+
+@scenario
+def s_channel_meta(rng):
+    """initialize 的 _meta 通道声明在包/流通道下的取值。"""
+    msgs = init_seq() + [b'{"jsonrpc":"2.0","id":2,"method":"tools/list"}']
+    return script(1, 244, [(b"echo", b"e")], msgs)
+
+
+@scenario
 def s_toobig(rng):
     """echo text 超限 → 响应超 8KB → E_TOOBIG 路径（工具成功但 tx 失败）。"""
     msgs = init_seq() + [
@@ -175,7 +224,7 @@ def rand_str(rng, n):
 def rand_json_method(rng):
     ms = [b"initialize", b"notifications/initialized", b"tools/list",
           b"tools/call", b"ping", b"bogus", b"notifications/x",
-          b"resources/list", b""]
+          b"resources/list", b"resources/read", b"notifications/cancelled", b""]
     return rng.choice(ms)
 
 
@@ -189,8 +238,13 @@ def rand_params(rng):
         return b'{"name":"echo","arguments":{"text":"' + rand_str(rng, rng.randint(1, 40)) + b'"}}}'
     if r < 0.7:
         return b'{"name":"' + rand_str(rng, rng.randint(1, 12)) + b'","arguments":{"text":"x"}}'
-    if r < 0.85:
+    if r < 0.8:
         return b'{"name":"echo","arguments":{}}'
+    if r < 0.92:
+        uri = rng.choice([b"bt-mcp://dev/log", b"bt-mcp://dev/hr_window",
+                          b"bt-mcp://dev/nope", b"bt-mcp://dev/log?cursor=8",
+                          b"garbage", b""])
+        return b'{"uri":"' + uri + b'"}'
     return rand_str(rng, rng.randint(0, 30))   # 乱 params
 
 

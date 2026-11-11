@@ -25,6 +25,8 @@ CTRL_PING = 2
 CTRL_RESUME_REQ = 3
 CTRL_RESUME_OK = 4
 CTRL_RESUME_REJ = 5
+CTRL_ACK = 6
+CTRL_NACK = 7
 
 
 def frame_msg(seq, flags, idx, payload):
@@ -295,7 +297,8 @@ def rand_script(rng, packet):
             s += op_rx(wire)
         elif r < 0.9:
             t = rng.choice([CTRL_CREDIT, CTRL_PING, CTRL_RESUME_REQ,
-                            CTRL_RESUME_OK, CTRL_RESUME_REJ, 0x77])
+                            CTRL_RESUME_OK, CTRL_RESUME_REJ,
+                            CTRL_ACK, CTRL_NACK, 0x77])
             args = bytes(rng.getrandbits(8)
                          for _ in range(rng.choice([0, 1, 2, 4, 8])))
             s += op_ctrl(t, args)

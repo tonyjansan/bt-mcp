@@ -14,18 +14,26 @@ typedef struct bt_mcp_writer {
 
 /* 直接 put 一段 */
 int bt_mcp_w_raw(bt_mcp_writer_t *w, const char *data, uint32_t len);
-/* 写字符串字面量（自动 JSON 转义） */
+/* 写字符串字面量（自动 JSON 转义）；_n 版本接受非 NUL 结尾切片 */
 int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s);
+int bt_mcp_w_str_n(bt_mcp_writer_t *w, const char *s, uint32_t n);
 /* begin: {"jsonrpc":"2.0","id":<id>,"result":{  / end: }}
- * error 版本：…"error":{"code":<code>,"message":"<msg>"} } */
+ * error 版本：…"error":{"code":<code>,"message":"<msg>"} }
+ * _id 版本支持字符串 id（id_str 非 NULL 时按字符串回显，内容为原文段） */
 int bt_mcp_w_begin_result (bt_mcp_writer_t *w, int64_t id);
 int bt_mcp_w_begin_error  (bt_mcp_writer_t *w, int64_t id,
                            int code, const char *message);
+int bt_mcp_w_begin_result_id (bt_mcp_writer_t *w, int64_t id,
+                              const char *id_str, uint16_t id_len);
+int bt_mcp_w_begin_error_id  (bt_mcp_writer_t *w, int64_t id,
+                              const char *id_str, uint16_t id_len,
+                              int code, const char *message);
 int bt_mcp_w_end          (bt_mcp_writer_t *w);
 /* 对象内键值（自动逗号）：str=字符串值，raw=内嵌 JSON */
 int bt_mcp_w_kv_str (bt_mcp_writer_t *w, const char *key, const char *val);
 int bt_mcp_w_kv_raw (bt_mcp_writer_t *w, const char *key,
                       const char *raw, uint32_t len);
 int bt_mcp_w_kv_u32 (bt_mcp_writer_t *w, const char *key, uint32_t v);
+int bt_mcp_w_kv_u64 (bt_mcp_writer_t *w, const char *key, uint64_t v);
 
 #endif
