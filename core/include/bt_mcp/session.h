@@ -103,6 +103,8 @@ struct bt_mcp_session {
      * 默认态等于 ack_tout_ms，因此无丢包时行为与 v0.4 完全一致。 */
     uint16_t         rto_cur_ms;
     uint16_t         rto_base_ms;
+    /* v0.6：空闲信用刷新（防「丢一个 CREDIT 就永久卡死」） */
+    uint32_t         last_ctrl_ms;
     uint8_t        resume_pending;
     uint32_t       resume_t0;
     /* RESUME 防爆破 */

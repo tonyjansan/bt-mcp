@@ -175,9 +175,11 @@ static int rx_dup_check(bt_mcp_session_t *s, uint8_t seq,
         if (!fp->valid) continue;
         if (fp->seq != seq || fp->len != len || fp->crc != crc) continue;
         if (s->now_ms - fp->t > BT_MCP_CFG_DEDUPE_MS) continue;  /* 窗口外不复用 */
-        /* 代次护栏：seq 是 u8，256 条后会同号。只有「最近 8 条」内的同号同内容
-         * 才算重传；否则视为合法的重复内容消息（例如重复的传感器通知）。 */
-        if (s->rx_msg_no - fp->msg_no > 8) continue;
+        /* 代次护栏：seq 是 u8，256 条后会同号。只有最近的同号同内容才算重传，
+         * 否则视为合法的重复内容消息（例如重复的传感器通知）。
+         * v0.6：护栏宽度与指纹槽数对齐（原来固定 8，与 RX_FP_SLOTS 不一致，
+         * 且小于实际可承受的乱序深度 → soak 里出现重复投递）。 */
+        if (s->rx_msg_no - fp->msg_no > BT_MCP_CFG_RX_FP_SLOTS) continue;
         return 1;
     }
     struct bt_mcp_rx_fp *fp = &s->rx_fp[s->rx_fp_next % BT_MCP_CFG_RX_FP_SLOTS];
@@ -376,6 +378,7 @@ static int tx_common(bt_mcp_session_t *s, const uint8_t *json, uint32_t len,
     int rc = bt_mcp_framer_send_seq(s->fr, BT_MCP_KIND_MCP, seq, json, len,
                                     s->emit, s->io);
     if (rc) return rc;               /* 没上线就不扣信用（v0.3 修信用泄漏） */
+    s->last_ctrl_ms = s->now_ms;     /* v0.6：有实际流量就不需要空闲刷新 */
     if (chan_credit(s)) s->credits--;
 
     /* 判例 5：不可靠包通道登记重传槽（放不下就放弃保护，仍照常发送）。
@@ -558,4 +561,18 @@ void bt_mcp_session_tick(bt_mcp_session_t *s, uint32_t now_ms)
     }
     if (s->fr) bt_mcp_framer_tick(s->fr, now_ms);
     bt_mcp_session_pump(s);                     /* 超时重传 / 待发 NACK */
+
+    /* v0.6：空闲信用刷新。
+     * 累计 CREDIT 的载荷是「我已消费的总条数」（绝对值），因此重发是幂等的。
+     * 没有这一步时：对端的 CREDIT 丢一个 → 我方信用永久少一格；若此时管道已空，
+     * 我方再也发不出消息，对端也就没有「消费」可用来补发 CREDIT → 永久 E_AGAIN。
+     * 只有真的空闲（本周期没发过任何帧）才刷，避免活跃链路上无谓开销。 */
+    if (BT_MCP_CFG_CREDIT_REFRESH_MS && chan_credit(s)
+        && (s->state == BT_MCP_S_READY || s->state == BT_MCP_S_LINK_UP)
+        && now_ms - s->last_ctrl_ms >= BT_MCP_CFG_CREDIT_REFRESH_MS) {
+        uint8_t cum[2] = { (uint8_t)(s->consumed & 0xFF),
+                           (uint8_t)(s->consumed >> 8) };
+        if (ctrl_frame(s, BT_MCP_CTRL_CREDIT, cum, 2) == 0)
+            s->last_ctrl_ms = now_ms;
+    }
 }

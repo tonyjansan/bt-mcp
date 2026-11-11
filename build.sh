@@ -179,6 +179,12 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
 BT_MCP_MOCK=build/btmcp_mock_shared BT_MCP_MAX_REASM=1 \
     python3 tests/m3_session_harness.py 40
 
+echo "== 链路仿真 soak（阶梯加压） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_soak.c core/src/frame.c core/src/session.c core/src/trace.c \
+   -o build/test_soak -lpthread
+./build/test_soak
+
 echo "== 多会话 × 多线程压测 =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_stress.c core/src/frame.c core/src/session.c core/src/json.c \

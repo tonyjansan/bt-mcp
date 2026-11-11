@@ -22,6 +22,13 @@ jobs:
       - name: Build + all suites (diff / HIL / unit / tiers)
         run: ./build.sh 200
 
+      - name: Link simulator soak
+        run: |
+          cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+             tests/test_soak.c core/src/frame.c core/src/session.c \
+             core/src/trace.c -o build/test_soak -lpthread
+          ./build/test_soak
+
       - name: RAM budget gate
         run: python3 tools/ram_baseline.py
 

@@ -137,6 +137,12 @@
 #ifndef BT_MCP_CFG_MAX_CONN
 #define BT_MCP_CFG_MAX_CONN      4      /* 一个 server pool 可挂的并发会话数 */
 #endif
+/* v0.6：信用刷新周期。累计 CREDIT 是幂等的，空闲时周期性重发可让对端从
+ * 「丢了一个 CREDIT」中自愈。没有它，发送方信用耗尽且无在途消息时无法恢复
+ * （v0.6 soak 实测：30% 丢包下会永久卡在 E_AGAIN）。0 = 关闭刷新。 */
+#ifndef BT_MCP_CFG_CREDIT_REFRESH_MS
+#define BT_MCP_CFG_CREDIT_REFRESH_MS  600
+#endif
 #ifndef BT_MCP_CFG_RTO_MAX_MS
 #define BT_MCP_CFG_RTO_MAX_MS    4800   /* 指数退避后的 RTO 上限（=8×600 基准） */
 #endif
