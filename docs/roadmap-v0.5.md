@@ -22,12 +22,18 @@
 | C3 keepalive | ✅ 完成 | 默认关闭（0），开启后空闲 PING / 判死收尾 |
 | C4 MTU 热更新 | ✅ 完成 | `bt_mcp_framer_set_mtu()` |
 | G8 丢包通道模型 | ✅ 完成 | `tests/test_lossy.c`，17 项不变量断言 |
-| **G1 FCS16 进差分矩阵** | ❌ **未完成** | 只有 C 侧 51 项往返 + fuzz；oracle 仍无 FCS 支持 |
-| **G2 覆盖率门禁** | ❌ **未完成** | 未接 gcov/llvm-cov 与阈值 |
-| **G4 符合性 golden 测试** | ❌ **未完成** | 未与官方 MCP SDK/Inspector 对跑 |
-| **G5 TSan/重入用例** | ⚠️ 部分 | 已有 C 侧重入验证脚本，未入 CI、无 TSan |
+| G1 FCS16 进差分矩阵 | ✅ 完成 | oracle 支持 FCS16（env 开关），m1/m3/m4 三组配对差分全绿 |
+| G2 覆盖率门禁 | ✅ 完成 | `tools/coverage.sh`（llvm-cov），行 86.6% / 分支 55.6%，阈值 86/55 |
+| G4 符合性测试 | ✅ 完成（结构校验版） | `tests/test_conformance.c` 57 项规范结构断言；**尚未**与官方 SDK/Inspector 对跑 |
+| G5 重入用例 | ✅ 完成 | `tests/test_reentrancy.c` 8 项；TSan 构建仍未接 |
 
-未完成项不是遗漏，是**明确的技术债**，全部进入 v0.5 P0（见 §1）。
+**G4 的价值已兑现**：它当场抓出两个差分发现不了的真缺陷（`level` 缺引号、
+内嵌资源内容项多一个右花括号导致 tools/call 输出非法 JSON）。
+这说明「结构校验」和「差分」是互补的，两者都必须有。
+
+仍未完成的只有两件（见 §1 V2/V4 的收敛版）：
+- 与**官方 MCP SDK/Inspector** 的真实 transcript 对跑（当前是自己校验自己）；
+- TSan/并发工具链接入（当前是单线程 + 手工重入用例）。
 
 ---
 
@@ -44,10 +50,10 @@ v0.4 期间，差分测试当场抓出了我重写时引入的 6 个缺陷（引
 
 | # | 任务 | 设计要点 | 验收 |
 |---|---|---|---|
-| V1 | **FCS16 进 C↔Rust 差分** | oracle 增加 FCS16 编解码（CRC16-CCITT，`hdr\|fcs\|payload`）；差分 harness 跑 `-DBT_MCP_CFG_FCS16=1` 的第二份 C mock 与第二份 oracle，形成 2×2 组合 | 差分矩阵在 FCS16 开/关两种配置下各跑 ≥300 组随机，全绿 |
-| V2 | **符合性 golden 测试** | 用官方 MCP SDK（TS/Python）作为 Host 侧，录制真实 `initialize`/`tools/list`/`tools/call`/`resources/read`/`prompts/get` 的请求-响应 transcript，作为 golden 文件；C 侧回放并逐字节比对（允许 id 重编号） | golden 套件独立可跑，纳入 CI；新增方法必须先落 golden |
-| V3 | **覆盖率门禁** | `-fprofile-instr-generate -fcoverage-mapping` 跑全量套件，输出行/分支覆盖率；CI 设阈值（建议行 ≥85%、`mcp_server.c`/`session.c` 分支 ≥75%），低于阈值失败 | CI 打印覆盖率并 fail-on-regression |
-| V4 | **重入与并发不变量** | 把「单写者模型」变成可执行断言：debug 构建下在 `session_tx`/`server_rx` 入口维护 `in_call` 深度，重入时 `bt_mcp_trace` 告警并可配置为 abort；补一组重入用例（回调内发 tx、两 server 交错、回调内 complete） | 重入用例全绿；TSan 构建下无数据竞争报告（单线程则验证工具链就绪） |
+| ~~V1~~ | ~~FCS16 进差分~~ | **v0.4 已完成** | — |
+| V2 | **真实 Host 符合性**（G4 的完全版） | 用官方 MCP SDK（TS/Python）作 Host，录制真实 transcript 作 golden；C 侧回放比对 | golden 套件纳入 CI |
+| V3 | **分支覆盖率补齐** | 当前分支 55.6%，目标是 `mcp_server.c`/`session.c` 分支 ≥75%：补错误路径（TOOBIG/NOMEM/BUSY/E_LOCKED）、分页边界、游标越界、S2C 超时、取消竞态 | 分支覆盖 ≥75% 并把阈值提上去 |
+| ~~V4~~ | ~~重入不变量~~ | **v0.4 已完成基础用例**；剩余：把断言做成 debug 构建可选开关 + TSan 接入 | — |
 
 ### P1（同批建议）
 
