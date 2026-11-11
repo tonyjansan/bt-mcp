@@ -101,5 +101,12 @@ cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
    core/src/frame.c -o build/fuzz_frame && ./build/fuzz_frame 10000000
 ```
 
-协议草案：[`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md)（BT-MCP v0.3）。
-集成者文档：[`docs/bt-mcp-interface-spec.html`](docs/bt-mcp-interface-spec.html)。
+## 文档
+
+| 文档 | 用途 |
+|---|---|
+| [`CHANGELOG.md`](CHANGELOG.md) | 按版本记录对外变更（含破坏性变更） |
+| [`docs/release-notes-v0.3.md`](docs/release-notes-v0.3.md) | v0.3 发布说明（GitHub Release 正文 / PR 描述） |
+| [`docs/v0.3-validation.md`](docs/v0.3-validation.md) | 变更清单、验证口径、实测数据、已知限制 |
+| [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | 协议草案 v0.3（设计原理与接口概要） |
+| [`docs/bt-mcp-interface-spec.html`](docs/bt-mcp-interface-spec.html) | 集成者规约（Proxy/Host 接入） |

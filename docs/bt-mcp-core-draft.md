@@ -302,59 +302,110 @@ void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact);
 
 /* ===== bt_mcp/mcp_server.h —— L5 ===== */
 /* JSON 解析为单遍 SAX 式（深度上限 6，键名白名单匹配，目标峰值 < 2KB RAM）。
-   写出为流式 writer 直写发送缓冲，不建 DOM。接口概要： */
-typedef struct {
-    const char *method;                      /* 指向只读静态区，不拷贝 */
-    /* 按需取参：找到才调用 getter，未出现的键不占内存 */
-    int (*get_str)(void *ctx, const char *key, const char **out, uint16_t *len);
-    int (*get_u32)(void *ctx, const char *key, uint32_t *out);
-    int (*get_raw)(void *ctx, const char *key, const char **out, uint32_t *len);
-} bt_mcp_request_t;
+   写出为流式 writer 直写发送缓冲，不建 DOM。v0.3 实际接口： */
 
-/* 工具/资源注册表：编译期 const 数组，运行期零 RAM 注册表 */
-typedef int (*bt_mcp_tool_fn)(const bt_mcp_request_t *req,
-                              bt_mcp_writer_t *out,       /* 流式 JSON 写出 */
-                              bt_mcp_progress_t prog,     /* 可空：发进度通知 */
+/* ---- bt_mcp/json.h —— 零拷贝请求视图 + 按需 getter ---- */
+typedef struct {
+    const char *src;      uint32_t len;        /* 原始报文（只读，不拷贝） */
+    const char *method;   uint16_t method_len;
+    const char *params;   uint16_t params_len; /* 顶层 params 片段 */
+    const char *id_str;   uint16_t id_str_len; /* 字符串 id 原文（含转义） */
+    int64_t     id_num;
+    uint8_t     id_is_str, has_id, has_method;
+} bt_mcp_json_req_t;
+
+int bt_mcp_json_parse    (const char *src, uint32_t len, bt_mcp_json_req_t *out);
+int bt_mcp_json_parse_msg(const char *src, uint32_t len, bt_mcp_json_req_t *out); /* 允许无 method（响应） */
+int bt_mcp_json_get_str  (const bt_mcp_json_req_t *r, const char *key,
+                          const char **out, uint16_t *len);   /* 返回引号内原文段 */
+int bt_mcp_json_get_u32  (const bt_mcp_json_req_t *r, const char *key, uint32_t *out);
+int bt_mcp_json_get_i32  (const bt_mcp_json_req_t *r, const char *key, int32_t *out);
+int bt_mcp_json_get_raw  (const bt_mcp_json_req_t *r, const char *key,
+                          const char **out, uint32_t *len);
+int bt_mcp_json_top_raw  (const bt_mcp_json_req_t *r, const char *key,
+                          const char **out, uint32_t *len);   /* 顶层键（响应 result/error） */
+int bt_mcp_json_get_sub  (const bt_mcp_json_req_t *r, const char *key,
+                          bt_mcp_json_req_t *sub);            /* params 内子对象嫁接 */
+uint16_t bt_mcp_json_decode_str(const char *s, const char *e,
+                                char *dst, uint16_t cap, uint16_t *need); /* 解转义 */
+
+/* ---- bt_mcp/writer.h —— 流式 JSON 写出（不建 DOM、不分配） ---- */
+int bt_mcp_w_raw    (bt_mcp_writer_t *w, const char *data, uint32_t len);
+int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s);      /* 转义并加引号 */
+int bt_mcp_w_str_n  (bt_mcp_writer_t *w, const char *s, uint32_t n);
+int bt_mcp_w_kv_str (bt_mcp_writer_t *w, const char *key, const char *val);
+int bt_mcp_w_kv_u32 (bt_mcp_writer_t *w, const char *key, uint32_t v);
+int bt_mcp_w_kv_u64 (bt_mcp_writer_t *w, const char *key, uint64_t v);
+int bt_mcp_w_kv_raw (bt_mcp_writer_t *w, const char *key, const char *raw_json);
+int bt_mcp_w_begin_result_id(bt_mcp_writer_t *w, int64_t id,
+                             const char *id_str, uint16_t id_str_len);
+int bt_mcp_w_begin_error_id (bt_mcp_writer_t *w, int64_t id,
+                             const char *id_str, uint16_t id_str_len,
+                             int code, const char *msg);
+int bt_mcp_w_end    (bt_mcp_writer_t *w);
+
+/* ---- bt_mcp/session.h —— L4（port 只需这几行） ---- */
+int  bt_mcp_session_init     (bt_mcp_session_t *s, const bt_mcp_session_cfg_t *cfg);
+void bt_mcp_session_bind     (bt_mcp_session_t *s, bt_mcp_framer_t *fr,
+                              int (*emit)(void *, const uint8_t *, uint16_t), void *io);
+void bt_mcp_session_link_up  (bt_mcp_session_t *s, uint32_t resume_token);
+void bt_mcp_session_mark_ready(bt_mcp_session_t *s);   /* 收到 notifications/initialized */
+void bt_mcp_session_link_down(bt_mcp_session_t *s, int bond_intact);
+int  bt_mcp_session_feed     (bt_mcp_session_t *s, const uint8_t *in, uint16_t len,
+                              bt_mcp_mcp_sink_t sink, void *user);  /* port 收数一行入口 */
+int  bt_mcp_session_rx       (bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
+                              const uint8_t *payload, uint16_t len,
+                              bt_mcp_mcp_sink_t sink, void *user);
+int  bt_mcp_session_tx       (bt_mcp_session_t *s, const uint8_t *json, uint32_t len);
+int  bt_mcp_session_ctrl     (bt_mcp_session_t *s, uint8_t type, const uint8_t *args, uint16_t len);
+int  bt_mcp_session_pump     (bt_mcp_session_t *s);    /* 冲 NACK / 到期重传 */
+void bt_mcp_session_tick     (bt_mcp_session_t *s, uint32_t now_ms);
+int  bt_mcp_session_ping     (bt_mcp_session_t *s, uint8_t epoch);
+uint32_t bt_mcp_session_rtt  (const bt_mcp_session_t *s, int *valid);  /* 0 或 RTT(ms) */
+
+/* ---- bt_mcp/mcp_server.h —— L5 注册表（编译期 const 数组，运行期零注册开销） ---- */
+/* 工具实现：返回 0=同步成功；BT_MCP_E_PENDING=已受理（稍后 server_complete）；
+ * 其余=错误（响应带 isError:true）。文本由工具直写 out（server 负责 JSON 转义）。 */
+typedef int (*bt_mcp_tool_fn)(const bt_mcp_json_req_t *req,
+                              bt_mcp_writer_t *out,
+                              bt_mcp_call_t *call,        /* 异步/进度/取消上下文 */
                               void *user);
 
 typedef struct {
-    const char       *name;
-    const char       *desc;
-    const char       *input_schema_json;   /* 内嵌 JSON Schema 字符串 */
-    uint8_t           authz;                /* 0=open 1=consent 2=restricted */
-    bt_mcp_tool_fn    fn;
-    void             *user;
+    const char     *name;
+    const char     *desc;
+    const char     *input_schema_json;      /* 内嵌 JSON Schema 字符串 */
+    uint8_t         authz;                  /* 0=open 1=consent 2=restricted */
+    bt_mcp_tool_fn  fn;
+    void           *user;
 } bt_mcp_tool_def_t;
 
+/* 资源读取：交出 [cursor, next) 窗口的静态文本（server 只读不拷贝） */
+#define BT_MCP_CURSOR_END 0xFFFFFFFFu
+typedef int (*bt_mcp_resource_read_fn)(void *user, uint32_t cursor,
+                                       const char **text, uint32_t *len,
+                                       uint32_t *next_cursor);
+
 typedef struct {
-    const char *name;        /* 如 "hr_window" */
-    const char *desc;
-    uint8_t     authz;
+    const char               *name;         /* 如 "hr_window" */
+    const char               *desc;
+    const char               *mime_type;    /* 可空 → text/plain */
+    uint8_t                   authz;
+    bt_mcp_resource_read_fn   read;         /* 可空 = 空内容资源 */
+    void                     *user;
 } bt_mcp_resource_def_t;
 
-extern const bt_mcp_tool_def_t     BT_MCP_TOOLS[];
-extern const uint16_t               BT_MCP_TOOLS_COUNT;
-extern const bt_mcp_resource_def_t BT_MCP_RESOURCES[];
-extern const uint16_t               BT_MCP_RESOURCES_COUNT;
-
-int  bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s,
-                        const char *fw_name, const char *fw_version);
-/* L4 上抛的完整 MCP 消息入口：解码→分派→写出响应（经 session_tx） */
-int  bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len);
-void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms);
-/* 设备主动事件（S→C notification：数据就绪/告警） */
-int  bt_mcp_server_notify(const char *method, const char *params_json);
-
-/* ===== bt_mcp/writer.h —— 流式 JSON 写出（L5 辅件） ===== */
-struct bt_mcp_writer {
-    int (*put)(void *sink, const char *data, uint32_t len);   /* 底层 sink=环形缓冲 */
-    void *sink;
-};
-int bt_mcp_w_begin_result (bt_mcp_writer_t*, int64_t req_id);
-int bt_mcp_w_str          (bt_mcp_writer_t*, const char *key, const char *val);
-int bt_mcp_w_u32          (bt_mcp_writer_t*, const char *key, uint32_t v);
-int bt_mcp_w_raw          (bt_mcp_writer_t*, const char *key, const char *raw_json);
-int bt_mcp_w_end_result   (bt_mcp_writer_t*);
+int  bt_mcp_server_init  (bt_mcp_server_t *sv, bt_mcp_session_t *s,
+                          const bt_mcp_server_cfg_t *cfg,
+                          const char *fw_name, const char *fw_version);
+int  bt_mcp_server_rx    (bt_mcp_server_t *sv, const uint8_t *json, uint32_t len);
+void bt_mcp_server_tick  (bt_mcp_server_t *sv, uint32_t now_ms);
+int  bt_mcp_server_notify(bt_mcp_server_t *sv, const char *method,
+                          const char *params_json, uint32_t params_len);
+/* 异步完成 / 进度 / 取消（工具回调期间与 complete 之前持有 call 指针） */
+int  bt_mcp_server_complete(bt_mcp_call_t *call, const char *text, int is_error);
+int  bt_mcp_call_progress  (bt_mcp_call_t *call, uint64_t done, uint64_t total);
+int  bt_mcp_call_cancelled (const bt_mcp_call_t *call);
 int bt_mcp_w_error        (bt_mcp_writer_t*, int64_t req_id,
                            int code, const char *message);
 ```
