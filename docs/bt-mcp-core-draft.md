@@ -1,9 +1,28 @@
-# BT-MCP 核心协议草案 v0.5 —— 平台无关设计
+# BT-MCP 核心协议草案 v0.6 —— 平台无关设计
 
-日期：2026-11-11 · 状态：草案（v0.5 实现已验证：1295 项差分 + 198 项 HIL + 626 项单元
-+ 38 项官方 MCP SDK 互验 + 20 项 golden，全绿；行覆盖 94.7% / 分支 67.1%）
+日期：2026-11-11 · 状态：草案。v0.6 实现已验证：**1295 项差分 + 198 项 port HIL
++ 695 项单元/定向 + 11469 项表驱动矩阵断言 + 38 项官方 MCP SDK 互验 + 20 项 golden**，
+全绿；行覆盖 **95.1%** / 分支 **68.2%**；ASan/UBSan/TSan 干净。
+
+> 本文是**唯一的协议与接口权威文档**（与公开头文件同步）。版本演进见下方摘要；
+> 各版本的发布说明与验证报告见 [`docs/README.md`](README.md) 的索引。
 
 ## 版本演进摘要
+
+**v0.6 相对 v0.5 的变化（主要是验证与健壮性，协议语义仅两处）：**
+
+- **协议语义 1：空闲信用刷新**。累计 CREDIT 帧不受 ARQ 保护，丢一个就少一格；
+  发送方信用耗尽且管道已空时，对端无新消费可用来补发 → 永久 `E_AGAIN`。
+  修复为 `session_tick` 在空闲 ≥ `BT_MCP_CFG_CREDIT_REFRESH_MS` 时重发累计
+  CREDIT（载荷是绝对值，重发幂等）（§5.4）；
+- **协议语义 2：去重窗口 4 → 8**（`RX_FP_SLOTS`）。同时把「恰好一次」的表述
+  从**无条件保证**改为**有界保证**，并给出实测对照表（§5.4）；
+- **writer 去掉 libc `snprintf` 依赖**：改为自研整数格式化（`fmt_u64`/`fmt_i64`，
+  含 INT64_MIN 溢出边界），使 JSON 写出层可在无 printf 的裸机环境构建；
+- **writer 错误语义**：透传 sink 错误码（区分 `E_TOOBIG` 与 `E_IO`）；
+- **验证引擎换代**：表驱动组合矩阵（3141 生成用例）、语法感知 fuzz（四条不变量）、
+  正交差分矩阵（配置签名比对）、链路仿真 soak、多会话压测、RAM 预算门禁、
+  文档一致性检查。详见 `roadmap-v0.6.md`。
 
 **v0.5 相对 v0.4 的变化：**
 - **规范语义修正**：`ping` 响应改为空结果对象 `{}`（原 `{"pong":true}` 不符规范）；
@@ -630,8 +649,12 @@ int  bt_mcp_w_content_audio(bt_mcp_writer_t *w, const char *b64, uint32_t b64len
                             const char *mime);
 int  bt_mcp_w_content_resource(bt_mcp_writer_t *w, const char *uri,
                                const char *mime, const char *text, uint32_t len);
+/* _meta 追加：name 是 _meta 内的键，json 是该键的 **JSON 片段原文**
+ * （不额外加引号）：传 "\"0.5\"" 得到 "k":"0.5"，传 {"a":1} 得到 "k":{"a":1}。
+ * 仅适用于**结果对象级** writer（如 prompts/get）；工具回调请用
+ * bt_mcp_call_set_meta()（那边传的是整个 "k":v 片段）。 */
 int  bt_mcp_w_meta(bt_mcp_writer_t *w, const char *name,
-                   const char *json, uint32_t len);   /* 仅结果对象级 writer */
+                   const char *json, uint32_t len);
 ```
 
 下行通知与 server→client 请求：

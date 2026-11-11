@@ -29,6 +29,15 @@ static int small_put(void *io, const char *d, uint32_t n)
     memcpy(s->b + s->n, d, n); s->n += n; return BT_MCP_OK;
 }
 
+/* 在字节里找子串（st.b 不是 NUL 结尾的 JSON 片段，必须按长度找） */
+static const void *mem_find_bytes(const uint8_t *hay, size_t hn, const char *needle)
+{
+    size_t nn = strlen(needle);
+    for (size_t i = 0; i + nn <= hn; i++)
+        if (!memcmp(hay + i, needle, nn)) return hay + i;
+    return NULL;
+}
+
 static void test_err_table(void)
 {
     /* 每个错误码都要能拿到非空、非 "unknown" 的描述 */
@@ -96,6 +105,34 @@ static void test_writer_edges(void)
         CHECK(s.b[0] == '"' && memchr(s.b, ',', s.n) != NULL,
               "comma inserted between pairs");
     }
+    /* 5b. 整数格式化边界（v0.6：writer 去掉 libc snprintf，改为自研实现） */
+    {
+        static const struct { int64_t v; const char *want; } CASES[] = {
+            { 0, "0" }, { 1, "1" }, { -1, "-1" },
+            { 2147483647LL, "2147483647" },
+            { -2147483648LL, "-2147483648" },
+            { 9223372036854775807LL, "9223372036854775807" },
+            /* INT64_MIN：取绝对值会溢出，必须靠无符号技巧 */
+            { (int64_t)(-9223372036854775807LL - 1),
+              "-9223372036854775808" },
+        };
+        for (unsigned i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+            small_t st; st.n = 0;
+            bt_mcp_writer_t wr = { .put = small_put, .sink = &st,
+                                   .need_comma = 0 };
+            int rc = bt_mcp_w_kv_raw(&wr, "k", "", 0);
+            (void)rc;
+            /* 直接走 id 路径验证 fmt_i64 */
+            st.n = 0;
+            bt_mcp_writer_t w2 = { .put = small_put, .sink = &st,
+                                   .need_comma = 0 };
+            CHECK(bt_mcp_w_begin_result(&w2, CASES[i].v) == BT_MCP_OK,
+                  "int format: begin_result ok");
+            CHECK(mem_find_bytes((const uint8_t *)st.b, st.n, CASES[i].want)
+                  != NULL, "int format matches snprintf");
+        }
+    }
+
     /* 6. 数值边界 */
     {
         small_t s; s.n = 0;

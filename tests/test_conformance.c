@@ -121,6 +121,11 @@ static int prompt_get(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *u)
         "[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"hi\"}}]",
         sizeof "[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"hi\"}}]" - 1);
     w->need_comma = 1;
+    /* v0.6：显式验证 bt_mcp_w_meta()——它接受**JSON 片段原文**（这里传字符串值
+     * "conf"），产出 "k":"conf"，而不是再套一层引号。 */
+    if (!rc) rc = bt_mcp_w_meta(w, "io.btmcp/src", "\"conf\"",
+                               (uint32_t)(sizeof "\"conf\"" - 1));
+    w->need_comma = 1;
     return rc;
 }
 static const bt_mcp_prompt_def_t PROMPTS[] = {
@@ -393,6 +398,10 @@ int main(void)
               "prompt has messages");
         CHECK(mem_find(g_json, g_json_len, "\"role\":\"user\"", sizeof "\"role\":\"user\"" - 1) != NULL,
               "prompt message has role");
+        /* w_meta 的正确形态：一次引号、无重复包裹 */
+        CHECK(mem_find(g_json, g_json_len, "\"_meta\":{\"io.btmcp/src\":\"conf\"}",
+                       sizeof "\"_meta\":{\"io.btmcp/src\":\"conf\"}" - 1) != NULL,
+              "prompt _meta via w_meta (single-quoted value)");
     }
 
     /* ---- 9. 订阅与日志：result 为空对象、通知形状 ---- */

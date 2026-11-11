@@ -233,6 +233,11 @@ static int prompt_greet(const bt_mcp_json_req_t *r, bt_mcp_writer_t *w, void *us
         "{\"type\":\"text\",\"text\":\"hello\"}}]";
     if (!rc) rc = bt_mcp_w_raw(w, MSGS, (uint32_t)(sizeof MSGS - 1));
     w->need_comma = 1;
+    /* v0.6：让 bt_mcp_w_meta() 走真实路径——prompts/get 拿到的是**结果对象级**
+     * writer，正是该 API 的设计用途（工具回调则必须用 call_set_meta）。 */
+    if (!rc) rc = bt_mcp_w_meta(w, "io.btmcp/prompt", "\"greet\"",
+                               (uint32_t)(sizeof "\"greet\"" - 1));
+    w->need_comma = 1;
     return rc;
 }
 

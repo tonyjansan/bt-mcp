@@ -474,10 +474,17 @@ int bt_mcp_w_meta(bt_mcp_writer_t *w, const char *name,
                   const char *json, uint32_t len)
 {
     if (!w || !name || (!json && len)) return BT_MCP_E_ARGS;
+    /* json 是**该键的 JSON 片段原文**（不是已带引号的字符串）：
+     * 传 "0.5" 得到 "k":"0.5"；传 {"a":1} 得到 "k":{"a":1}。
+     * 与 bt_mcp_call_set_meta 的契约一致（那边是整个 "k":v 片段，
+     * 这边是 k/v 分开传，内部仍按原文写出，不额外加引号）。 */
     int rc = kv_open(w, "_meta");
     if (!rc) rc = bt_mcp_w_raw(w, "{", 1);
-    if (!rc) { w->need_comma = 0; rc = kv_str_slice(w, name, json ? json : "",
-                                                    len); }
+    if (!rc) {
+        w->need_comma = 0;
+        rc = bt_mcp_w_key(w, name);      /* 内部已写出 "key": */
+        if (!rc) rc = bt_mcp_w_raw(w, json ? json : "", len);
+    }
     if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
     w->need_comma = 1;
     return rc;

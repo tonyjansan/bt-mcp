@@ -27,7 +27,8 @@ ALLOW = {
     'bt_mcp_session_ctrl',          # 存在，但可能被写作 session_ctrl 简写
 }
 
-DOCS = ['README.md', 'docs/bt-mcp-core-draft.md', 'docs/bt-mcp-interface-spec.html',
+DOCS = ['README.md', 'docs/README.md', 'docs/bt-mcp-core-draft.md',
+        'docs/bt-mcp-interface-spec.html',
         'docs/v0.5-validation.md', 'docs/v0.4-validation.md',
         'docs/release-notes-v0.4.md', 'docs/release-notes-v0.3.md',
         'docs/roadmap-v0.5.md', 'docs/roadmap-v0.6.md', 'CHANGELOG.md']
@@ -59,10 +60,10 @@ def check_symbols():
 
 def check_numbers():
     """回归基线数字必须在 README / draft / validation 三处一致。"""
+    # v0.6 起的基线口径：差分 1295 / HIL 198 / 单元 695 / 矩阵 11469 / SDK 38 / golden 20
     targets = {
-        'README.md': [r'1295', r'198', r'626', r'38', r'20'],
-        'docs/bt-mcp-core-draft.md': [r'1295', r'198', r'626', r'38', r'20'],
-        'docs/v0.5-validation.md': [r'1295', r'198', r'626', r'38', r'20'],
+        'README.md': [r'1295', r'198', r'695', r'38', r'20'],
+        'docs/bt-mcp-core-draft.md': [r'1295', r'198', r'695', r'11469', r'38', r'20'],
     }
     for path, pats in targets.items():
         if not os.path.exists(path):
@@ -75,7 +76,7 @@ def check_numbers():
 
 def check_versions():
     """三份主文档的版本号必须一致。"""
-    want = 'v0.5'
+    want = 'v0.6'
     checks = {
         'README.md': r'## Status \(2026-\d\d-\d\d, (v\d\.\d)\)',
         'docs/bt-mcp-core-draft.md': r'# BT-MCP 核心协议草案 (v\d\.\d)',
@@ -92,10 +93,25 @@ def check_versions():
             fails.append(f"{path}: 版本 {m.group(1)} != {want}")
 
 
+def check_index():
+    """docs/README.md 里用链接列出的本地文件必须真实存在（防断链）。"""
+    path = 'docs/README.md'
+    if not os.path.exists(path):
+        fails.append('docs/README.md 不存在')
+        return
+    t = open(path, encoding='utf-8').read()
+    for m in re.finditer(r'\]\(([^)#]+\.(?:md|html))\)', t):
+        rel = m.group(1)
+        target = os.path.normpath(os.path.join('docs', rel))
+        if not os.path.exists(target):
+            fails.append(f'docs/README.md: 链接指向不存在的文件 {rel}')
+
+
 def main():
     check_symbols()
     check_numbers()
     check_versions()
+    check_index()
     if fails:
         print("文档与代码不一致：")
         for f in fails:

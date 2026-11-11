@@ -1669,6 +1669,8 @@ fn prompts_get(r: &Req) -> Result<Vec<u8>, i32> {
     b.extend_from_slice(b"\"description\":");
     b.extend_from_slice(&json_escape(b"A friendly greeting"));
     b.extend_from_slice(b",\"messages\":[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"hello\"}}]");
+    /* 与 C 的 bt_mcp_w_meta 逐字节一致（v0.6：让该 API 走真实路径） */
+    b.extend_from_slice(b",\"_meta\":{\"io.btmcp/prompt\":\"greet\"}");
     Ok(b)
 }
 

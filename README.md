@@ -4,7 +4,7 @@ Bluetooth-carried MCP (Model Context Protocol) stack — a platform-agnostic
 C99 protocol core that runs MCP over BLE GATT / Classic SPP / L2CAP CoC / any
 byte channel, with zero vendor ifdefs and zero OS dependencies.
 
-## Status (2026-11-11, v0.5)
+## Status (2026-11-11, v0.6)
 
 | Layer | Module | Notes |
 |---|---|---|
@@ -21,7 +21,8 @@ byte channel, with zero vendor ifdefs and zero OS dependencies.
 |---|---|
 | C ↔ 独立 Rust oracle 差分 | **1295**（主矩阵 1045 + FCS16 配对 196 + 共享模式 54） |
 | Port HIL（GATT/SPP/CoC） | **198** |
-| 单元与定向 | **626** |
+| 单元与定向 | **695** |
+| 表驱动矩阵断言 | **11469**（3141 生成用例） |
 | 官方 MCP TypeScript SDK 互验 | **38** |
 | golden transcript | **20** |
 
@@ -157,5 +158,6 @@ cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
 | [`docs/roadmap-v0.5.md`](docs/roadmap-v0.5.md) | v0.5 规划与设计（可验证性与互操作）+ 执行结果 |
 | [`docs/v0.5-validation.md`](docs/v0.5-validation.md) | v0.5 验证报告（含四层验证战果、已知未达标项） |
 | [`docs/roadmap-v0.6.md`](docs/roadmap-v0.6.md) | v0.6 规划与设计（自动化对抗与规模验证） |
-| [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | 协议草案 **v0.5**（设计原理、线格式、完整 API 骨架、实测开销） |
+| [`docs/README.md`](docs/README.md) | **文档索引**（活文档 vs 历史记录、维护约定） |
+| [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | 协议草案 **v0.6**（设计原理、线格式、完整 API 骨架、实测开销） |
 | [`docs/bt-mcp-interface-spec.html`](docs/bt-mcp-interface-spec.html) | 集成者规约（Proxy/Host 接入） |

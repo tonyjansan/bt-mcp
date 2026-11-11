@@ -55,7 +55,7 @@ $CC -O0 -g -std=c99 $COVFLAGS -DBT_MCP_CFG_FCS16=1 $INC \
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_conformance.c $CORE -o "$OUT/t_conf"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
-    tests/test_threads.c $CORE -o "$OUT/t_thr" -lpthread
+    tests/test_stress.c $CORE -o "$OUT/t_stress" -lpthread
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_multisession.c $CORE -o "$OUT/t_multi"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
@@ -64,8 +64,6 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_l5_edges.c $CORE -o "$OUT/t_l5e"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_json_corpus.c core/src/json.c -o "$OUT/t_jc"
-$CC -O0 -g -std=c99 $COVFLAGS $INC \
-    tests/test_l5_fuzz.c $CORE -o "$OUT/t_lf"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_fault.c $CORE -o "$OUT/t_fault"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
@@ -89,7 +87,7 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=256 \
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -97,7 +95,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

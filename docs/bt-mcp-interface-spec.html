@@ -84,8 +84,8 @@ a{color:var(--accent)}
 </style>
 
 <div class="wrap">
-<h1>BT-MCP v0.5 外部接口规约</h1>
-<p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-11 · v0.5</p>
+<h1>BT-MCP v0.6 外部接口规约</h1>
+<p class="sub">蓝牙承载 MCP 协议栈 · Proxy / Host 集成者文档 · C99 平台无关内核 · 2026-11-11 · v0.6</p>
 
 <p>本文面向要把 <strong>bt-mcp core</strong> 接到真实 GATT / SPP 通道上的宿主（Proxy/Host）开发者。core 自身零厂商假设、零 OS 依赖、无动态分配；宿主的全部职责集中在三件事：<strong>① 填通道能力结构体，② 提供一对 emit/送达回调，③ 驱动时钟（tick）</strong>。其余协议细节（分片、信用、状态机、JSON-RPC）由 core 内部消化。</p>
 

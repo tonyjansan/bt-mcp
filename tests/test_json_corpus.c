@@ -156,6 +156,29 @@ int main(void)
         CHECK(1, "decode malformed doesn't crash");
     }
 
+    /* 严格版 bt_mcp_json_parse：必须有 method（响应报文会被拒绝）。
+     * 这是与 parse_msg 的唯一差异，必须被显式验证，否则「两个看起来一样的
+     * 解析入口」很容易被误用。 */
+    {
+        const char *req = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}";
+        const char *resp = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}";
+        bt_mcp_json_req_t r;
+        CHECK(bt_mcp_json_parse(req, (uint32_t)strlen(req), &r) == 0,
+              "strict parse: request with method ok");
+        CHECK(r.method && r.method_len == 4
+              && !memcmp(r.method, "ping", 4), "strict parse: method located");
+        CHECK(bt_mcp_json_parse(resp, (uint32_t)strlen(resp), &r) != 0,
+              "strict parse: response without method rejected");
+        /* 宽松版必须接受同一条响应（对照） */
+        CHECK(bt_mcp_json_parse_msg(resp, (uint32_t)strlen(resp), &r) == 0,
+              "lenient parse: response accepted");
+        /* 空指针 */
+        CHECK(bt_mcp_json_parse(NULL, 0, &r) != 0, "strict parse: NULL src");
+        CHECK(bt_mcp_json_parse(req, (uint32_t)strlen(req), NULL) != 0,
+              "strict parse: NULL out");
+    }
+
+
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

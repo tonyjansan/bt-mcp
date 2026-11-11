@@ -26,6 +26,9 @@
 | G2 覆盖率门禁 | ✅ 完成 | `tools/coverage.sh`（llvm-cov），行 86.6% / 分支 55.6%，阈值 86/55 |
 | G4 符合性测试 | ✅ 完成 | `tests/test_conformance.c` 59 项结构断言 + `tests/golden_replay.py` 20 项 golden transcript（golden 逐条人工比对规范） |
 | G5 重入/TSan 用例 | ✅ 完成 | `tests/test_reentrancy.c` 8 项 + `tests/test_threads.c` 10 项（两线程两实例并发，TSan 干净） |
+> 注（v0.6 整理）：`test_threads.c` 已被 `test_stress.c`（4×4 + 断链重连 + 池分派）
+> 取代并删除；`test_l5_fuzz.c` 已被 `fuzz/fuzz_l5.c`（结构变异 + 四条不变量）取代并删除。
+
 
 **G4 的价值已兑现三次**：结构校验抓出 `level` 缺引号与「内嵌资源多一个右花括号
 导致 tools/call 输出非法 JSON」；golden 核对抓出 `ping` 响应不是空对象。

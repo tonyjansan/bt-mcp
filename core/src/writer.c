@@ -1,8 +1,7 @@
-/* writer.c —— 流式 JSON writer 实现。零 malloc、零 DOM。 */
+/* writer.c —— 流式 JSON writer 实现。零 malloc、零 DOM、零 libc 格式化。 */
 #include "bt_mcp/writer.h"
 #include "bt_mcp/err.h"
 #include <string.h>
-#include <stdio.h>
 
 int bt_mcp_w_raw(bt_mcp_writer_t *w, const char *data, uint32_t len)
 {
@@ -51,6 +50,41 @@ int bt_mcp_w_str_lit(bt_mcp_writer_t *w, const char *s)
     return bt_mcp_w_str_n(w, s, (uint32_t)strlen(s));
 }
 
+/* 自研整数格式化：不依赖 libc 的 snprintf。
+ * 动机：writer 是设备端热路径，snprintf 会带入 2~6KB 的格式化代码，
+ * 与「8/16 位 MCU 可裁剪」的定位冲突。语义需与 snprintf("%lld"/"%d"/"%lu"/"%llu")
+ * 完全一致（含 INT64_MIN 的溢出边界），由差分与单测守住。 */
+#if defined(__GNUC__) || defined(__clang__)
+#  define BT_MCP_NOINLINE __attribute__((noinline))
+#else
+#  define BT_MCP_NOINLINE
+#endif
+/* 不内联：这 4 个调用点若各自内联，目标文件会多出数份相同代码
+ * （实测 .o 从 3638B 涨到 6265B）；保持单份反而更省。 */
+static BT_MCP_NOINLINE int fmt_u64(char *buf, uint32_t cap, uint64_t v)
+{
+    char tmp[24];
+    int n = 0, i;
+    do { tmp[n++] = (char)('0' + (int)(v % 10u)); v /= 10u; } while (v);
+    if ((uint32_t)n + 1 > cap) return -1;
+    for (i = 0; i < n; i++) buf[i] = tmp[n - 1 - i];
+    buf[n] = 0;
+    return n;
+}
+
+static BT_MCP_NOINLINE int fmt_i64(char *buf, uint32_t cap, int64_t v)
+{
+    if (v < 0) {
+        if (cap < 2) return -1;
+        buf[0] = '-';
+        /* -INT64_MIN 溢出：按无符号取绝对值 */
+        uint64_t mag = (uint64_t)(-(v + 1)) + 1u;
+        int n = fmt_u64(buf + 1, cap - 1, mag);
+        return n < 0 ? -1 : n + 1;
+    }
+    return fmt_u64(buf, cap, (uint64_t)v);
+}
+
 /* id 写出：字符串 id 用 "…" 包裹原文段（原文段已含转义，直接透传即合法 JSON） */
 static int put_id(bt_mcp_writer_t *w, int64_t id, const char *id_str, uint16_t id_len)
 {
@@ -60,8 +94,8 @@ static int put_id(bt_mcp_writer_t *w, int64_t id, const char *id_str, uint16_t i
         if (!rc) rc = bt_mcp_w_raw(w, id_str, id_len);
         return rc ? rc : put_lit(w, "\"");
     }
-    int n = snprintf(buf, sizeof buf, "%lld", (long long)id);
-    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
+    int n = fmt_i64(buf, sizeof buf, id);
+    if (n < 0) return BT_MCP_E_ARGS;
     return bt_mcp_w_raw(w, buf, (uint32_t)n);
 }
 
@@ -87,8 +121,8 @@ int bt_mcp_w_begin_error_id(bt_mcp_writer_t *w, int64_t id,
     int rc = put_lit(w, "{\"jsonrpc\":\"2.0\",\"id\":");
     if (!rc) rc = put_id(w, id, id_str, id_len);
     if (!rc) rc = put_lit(w, ",\"error\":{\"code\":");
-    int n = snprintf(buf, sizeof buf, "%d", code);
-    if (!rc && (n < 0 || (size_t)n >= sizeof buf)) rc = BT_MCP_E_ARGS;
+    int n = fmt_i64(buf, sizeof buf, (int64_t)code);
+    if (!rc && n < 0) rc = BT_MCP_E_ARGS;
     if (!rc) rc = bt_mcp_w_raw(w, buf, (uint32_t)n);
     if (!rc) rc = put_lit(w, ",\"message\":");
     if (!rc) rc = bt_mcp_w_str_lit(w, message);
@@ -143,15 +177,15 @@ int bt_mcp_w_kv_raw(bt_mcp_writer_t *w, const char *key,
 int bt_mcp_w_kv_u32(bt_mcp_writer_t *w, const char *key, uint32_t v)
 {
     char buf[24];
-    int n = snprintf(buf, sizeof buf, "%lu", (unsigned long)v);
-    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
+    int n = fmt_u64(buf, sizeof buf, (uint64_t)v);
+    if (n < 0) return BT_MCP_E_ARGS;
     return bt_mcp_w_kv_raw(w, key, buf, (uint32_t)n);
 }
 
 int bt_mcp_w_kv_u64(bt_mcp_writer_t *w, const char *key, uint64_t v)
 {
     char buf[32];
-    int n = snprintf(buf, sizeof buf, "%llu", (unsigned long long)v);
-    if (n < 0 || (size_t)n >= sizeof buf) return BT_MCP_E_ARGS;
+    int n = fmt_u64(buf, sizeof buf, (uint64_t)v);
+    if (n < 0) return BT_MCP_E_ARGS;
     return bt_mcp_w_kv_raw(w, key, buf, (uint32_t)n);
 }
