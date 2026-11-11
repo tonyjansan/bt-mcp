@@ -89,6 +89,39 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    -o build/test_reentrancy
 ./build/test_reentrancy
 
+echo "== JSON 解析语料 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_json_corpus.c core/src/json.c -o build/test_json_corpus
+./build/test_json_corpus
+
+echo "== L5 方法级错误路径 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_l5_edges.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c \
+   -o build/test_l5_edges
+./build/test_l5_edges
+
+echo "== 故障注入（错误传播链） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_fault.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_fault
+./build/test_fault
+
+echo "== L5 入口随机输入（覆盖率） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_l5_fuzz.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_l5_fuzz
+./build/test_l5_fuzz
+
+echo "== 边界与错误路径 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_edges.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/mcp_client.c \
+   core/src/err.c core/src/trace.c -o build/test_edges
+./build/test_edges
+
 echo "== 共享重组缓冲（V11，两种配置） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_shared_reasm.c core/src/frame.c core/src/trace.c \

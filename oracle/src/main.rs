@@ -1228,11 +1228,20 @@ fn parse_req(json: &[u8]) -> Result<Req, Option<Req>> {
         } else if key_known && key == b"params" {
             r.params = json[v0..v1].to_vec();
         }
-        if peek_at(json, &mut p, b',') { p += 1; }
-        else if !peek_at(json, &mut p, b'}') && p < json.len() {
+        if peek_at(json, &mut p, b',') {
+            p += 1;
+            /* 严格 JSON：逗号后不允许直接闭合（{"a":1,} 是语法错） */
+            if peek_at(json, &mut p, b'}') { return Err(id_seen(&r)); }
+        } else if !peek_at(json, &mut p, b'}') && p < json.len() {
             return Err(id_seen(&r));
         }
     }
+    /* 闭合对象后只允许空白（与 C 同：尾随垃圾视为报文损坏） */
+    p += 1;
+    while p < json.len() && matches!(json[p], b' ' | b'\t' | b'\r' | b'\n') {
+        p += 1;
+    }
+    if p < json.len() { return Err(id_seen(&r)); }
     if !r.has_method { return Err(id_seen(&r)); }
     Ok(r)
 }

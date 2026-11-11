@@ -6,7 +6,7 @@
 
 int bt_mcp_w_raw(bt_mcp_writer_t *w, const char *data, uint32_t len)
 {
-    if (!w || !w->put || (!data && len)) return BT_MCP_E_ARGS;
+    if (!w || !w->put || !w->sink || (!data && len)) return BT_MCP_E_ARGS;
     return w->put(w->sink, data, len) ? BT_MCP_E_IO : BT_MCP_OK;
 }
 

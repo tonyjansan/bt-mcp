@@ -2,19 +2,21 @@
 # coverage.sh —— 覆盖率门禁（v0.4 G2）
 #
 # 跑核心单元/定向测试，产出 core/src 的行覆盖率与分支覆盖率，低于阈值则失败。
-# 用法： ./tools/coverage.sh [行阈值] [分支阈值]     默认 86 55
+# 用法： ./tools/coverage.sh [行阈值] [分支阈值]     默认 94 66
 #
 # 阈值的取法：**防回归**（略低于当前实测值），不是「跳到目标」。
-# 当前实测：行 86.6% / 分支 55.6%（2026-11-11，含 conformance/重入/有损/客户端）。
-# v0.5 的目标是行 85 / 分支 75（行目标已达成，分支差距见 roadmap V3）
+# 当前实测：行 94.6% / 分支 66.9%（2026-11-11）。
+# v0.5 V3 的分支目标是 75%：**尚未达成**（差 8pp），缺口集中在 mcp_server.c
+# 的方法级参数矩阵与错误传播链，需要系统化故障注入 + 参数组合矩阵才能补齐。
+# 阈值按「防回归」设定（略低于实测），不用未达成的目标值做门禁。
 # （见 docs/roadmap-v0.5.md V3），达标后再把阈值提上去。
 #
 # 为什么只统计单元/定向测试、不统计差分：差分跑的是 mock 可执行文件，
 # 其覆盖率反映的是 mock 的分派逻辑而非 core 的分支；单元测试才是分支覆盖主力。
 set -e
 
-LINE_MIN=${1:-86}
-BRANCH_MIN=${2:-55}
+LINE_MIN=${1:-94}
+BRANCH_MIN=${2:-66}
 OUT=build/cov
 mkdir -p "$OUT"
 
@@ -54,10 +56,20 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_threads.c $CORE -o "$OUT/t_thr" -lpthread
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_multisession.c $CORE -o "$OUT/t_multi"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_edges.c $CORE -o "$OUT/t_edges"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_l5_edges.c $CORE -o "$OUT/t_l5e"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_json_corpus.c core/src/json.c -o "$OUT/t_jc"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_l5_fuzz.c $CORE -o "$OUT/t_lf"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_fault.c $CORE -o "$OUT/t_fault"
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -65,7 +77,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_thr t_multi t_edges t_l5e t_jc t_lf t_fault; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

@@ -281,9 +281,18 @@ static int parse_core(const char *src, uint32_t len, bt_mcp_json_req_t *out)
             out->params = v0;
             out->params_len = (uint32_t)(v1 - v0);
         }
-        if (peek(&c, ',')) c.p++;
-        else if (!peek(&c, '}') && c.p < c.end) return BT_MCP_E_PARSE;
+        if (peek(&c, ',')) {
+            c.p++;
+            /* 严格 JSON：逗号后不允许直接闭合（{"a":1,} 是语法错） */
+            if (peek(&c, '}')) return BT_MCP_E_PARSE;
+        } else if (!peek(&c, '}') && c.p < c.end) return BT_MCP_E_PARSE;
     }
+    /* 闭合对象后只允许空白：带尾随垃圾说明报文已损坏（帧长度本已界定边界），
+     * 静默忽略会让畸形报文被当正常消息处理，掩盖真实错误。 */
+    c.p++;                                  /* 跳过 '}' */
+    while (c.p < c.end && (*c.p == ' ' || *c.p == '\t'
+                           || *c.p == '\r' || *c.p == '\n')) c.p++;
+    if (c.p < c.end) return BT_MCP_E_PARSE;
     return BT_MCP_OK;
 }
 
@@ -324,8 +333,11 @@ static int find_key(const bt_mcp_json_req_t *r, const char *key,
         if (key_known && !strcmp(kbuf, key)) {
             *vout = v0; *vlen = (uint32_t)(v1 - v0); return BT_MCP_OK;
         }
-        if (peek(&c, ',')) c.p++;
-        else if (!peek(&c, '}') && c.p < c.end) return BT_MCP_E_PARSE;
+        if (peek(&c, ',')) {
+            c.p++;
+            /* 严格 JSON：逗号后不允许直接闭合（{"a":1,} 是语法错） */
+            if (peek(&c, '}')) return BT_MCP_E_PARSE;
+        } else if (!peek(&c, '}') && c.p < c.end) return BT_MCP_E_PARSE;
     }
     return BT_MCP_E_PARSE;
 }
@@ -333,6 +345,7 @@ static int find_key(const bt_mcp_json_req_t *r, const char *key,
 int bt_mcp_json_get_str(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint16_t *len)
 {
+    if (!r || !out || !len) return BT_MCP_E_ARGS;
     const char *v; uint32_t vl;
     int rc = find_key(r, key, &v, &vl);
     if (rc) return rc;
@@ -343,6 +356,7 @@ int bt_mcp_json_get_str(const bt_mcp_json_req_t *r, const char *key,
 
 int bt_mcp_json_get_u32(const bt_mcp_json_req_t *r, const char *key, uint32_t *out)
 {
+    if (!r || !out) return BT_MCP_E_ARGS;
     const char *v; uint32_t vl;
     int rc = find_key(r, key, &v, &vl);
     if (rc) return rc;
@@ -359,6 +373,7 @@ int bt_mcp_json_get_u32(const bt_mcp_json_req_t *r, const char *key, uint32_t *o
 
 int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *out)
 {
+    if (!r || !out) return BT_MCP_E_ARGS;
     const char *v; uint32_t vl;
     int rc = find_key(r, key, &v, &vl);
     if (rc) return rc;
@@ -382,6 +397,7 @@ int bt_mcp_json_get_i32(const bt_mcp_json_req_t *r, const char *key, int32_t *ou
  * 与本项目其它 getter 的饱和/严格风格一致。 */
 int bt_mcp_json_get_f64(const bt_mcp_json_req_t *r, const char *key, double *out)
 {
+    if (!r || !out) return BT_MCP_E_ARGS;
     const char *v; uint32_t vl;
     int rc = find_key(r, key, &v, &vl);
     if (rc) return rc;
@@ -445,13 +461,14 @@ int bt_mcp_json_get_f64(const bt_mcp_json_req_t *r, const char *key, double *out
 int bt_mcp_json_get_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len)
 {
+    if (!r || !out || !len) return BT_MCP_E_ARGS;
     return find_key(r, key, out, len);
 }
 
 int bt_mcp_json_top_raw(const bt_mcp_json_req_t *r, const char *key,
                         const char **out, uint32_t *len)
 {
-    if (!r || !r->src) return BT_MCP_E_ARGS;
+    if (!r || !r->src || !out || !len) return BT_MCP_E_ARGS;
     bt_mcp_json_req_t whole;
     memset(&whole, 0, sizeof whole);
     whole.src = r->src;
@@ -464,6 +481,7 @@ int bt_mcp_json_top_raw(const bt_mcp_json_req_t *r, const char *key,
 int bt_mcp_json_get_sub(const bt_mcp_json_req_t *r, const char *key,
                         bt_mcp_json_req_t *sub)
 {
+    if (!r || !sub) return BT_MCP_E_ARGS;
     const char *v; uint32_t vl;
     int rc = find_key(r, key, &v, &vl);
     if (rc) return rc;

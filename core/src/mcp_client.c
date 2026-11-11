@@ -126,7 +126,7 @@ int bt_mcp_client_call_tool(bt_mcp_client_t *c, const char *name,
                             const char *args_json, uint32_t args_len,
                             uint32_t *out_id)
 {
-    if (!name) return BT_MCP_E_ARGS;
+    if (!c || !name) return BT_MCP_E_ARGS;
     size_t n = 0;
     char *cbuf = c->cbuf;
     int w = snprintf(cbuf, sizeof c->cbuf, "{\"name\":\"%s\",\"arguments\":", name);
@@ -148,7 +148,7 @@ int bt_mcp_client_call_tool(bt_mcp_client_t *c, const char *name,
 int bt_mcp_client_read_resource(bt_mcp_client_t *c, const char *uri, uint32_t *out_id)
 {
     char params[256];
-    if (!uri) return BT_MCP_E_ARGS;
+    if (!c || !uri) return BT_MCP_E_ARGS;
     int n = snprintf(params, sizeof params, "{\"uri\":\"%s\"}", uri);
     if (n < 0 || (size_t)n >= sizeof params) return BT_MCP_E_TOOBIG;
     return send_request(c, "resources/read", params, (uint32_t)n, out_id);
