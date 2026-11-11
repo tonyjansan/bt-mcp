@@ -178,6 +178,13 @@ struct bt_mcp_server {
     const char *fw_name, *fw_ver;
     uint8_t  initialized;    /* notifications/initialized 已到 */
     uint8_t  log_level;      /* logging/setLevel 设定的最低级别 */
+    /* 协商到的协议版本（决定是否接受 JSON-RPC batch；v0.5 V6）。
+     * 空串 = 尚未协商 → 按最新版本处理（batch 不支持）。 */
+    char     proto[12];
+    /* batch 收集状态：批处理期间 respond 追加到这里，最后一次性发出 */
+    uint8_t  batching;
+    uint32_t bout_len;
+    char     bout[BT_MCP_CFG_BATCH_BUF];
     uint32_t now_ms;
     struct bt_mcp_call calls[BT_MCP_CFG_MAX_PENDING];
     /* 资源订阅状态（存 cfg.resources 的下标） */

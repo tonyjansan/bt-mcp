@@ -332,6 +332,15 @@ int bt_mcp_server_init(bt_mcp_server_t *sv, bt_mcp_session_t *s,
 static int tx_response(bt_mcp_server_t *sv, const char *buf, uint32_t len)
 {
     if (!sv->sess) return BT_MCP_E_STATE;
+    /* batch 模式：把响应追加到聚合缓冲，最后一个元素处理完再整条发出 */
+    if (sv->batching) {
+        uint32_t need = (sv->bout_len ? 1u : 0u) + len;
+        if (sv->bout_len + need > sizeof sv->bout) return BT_MCP_E_TOOBIG;
+        if (sv->bout_len) sv->bout[sv->bout_len++] = ',';
+        memcpy(sv->bout + sv->bout_len, buf, len);
+        sv->bout_len += len;
+        return BT_MCP_OK;
+    }
     return bt_mcp_session_tx(sv->sess, (const uint8_t *)buf, len);
 }
 
@@ -616,6 +625,14 @@ static int body_initialize(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void 
             rc = bt_mcp_w_str_lit(w, BT_MCP_PROTO_VERSION);
         }
     }
+    /* v0.5 V6：记录协商版本，决定后续是否接受 JSON-RPC batch */
+    {
+        const char *eff = have ? pv : BT_MCP_PROTO_VERSION;
+        uint16_t effl = have ? pvl : (uint16_t)(sizeof BT_MCP_PROTO_VERSION - 1);
+        uint16_t k = effl < sizeof sv->proto - 1 ? effl : (uint16_t)(sizeof sv->proto - 1);
+        memcpy(sv->proto, eff, k);
+        sv->proto[k] = 0;
+    }
     w->need_comma = 1;
     /* capabilities：如实反映本实现支持的通知能力 */
     if (!rc) rc = kv_raw_new(w, "capabilities",
@@ -636,9 +653,9 @@ static int body_initialize(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void 
     if (!rc) rc = bt_mcp_w_str_lit(w, sv->fw_ver);
     if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
     /* _meta.io.btmcp */
-    if (!rc) rc = bt_mcp_w_raw(w, ",\"_meta\":{\"io.btmcp/ver\":\"0.4\","
+    if (!rc) rc = bt_mcp_w_raw(w, ",\"_meta\":{\"io.btmcp/ver\":\"0.5\","
                                   "\"io.btmcp/chan\":{",
-                               sizeof ",\"_meta\":{\"io.btmcp/ver\":\"0.4\","
+                               sizeof ",\"_meta\":{\"io.btmcp/ver\":\"0.5\","
                                       "\"io.btmcp/chan\":{" - 1);
     w->need_comma = 0;
     if (!rc) rc = kv_u32_new(w, "kind",
@@ -1246,7 +1263,8 @@ int bt_mcp_server_log(bt_mcp_server_t *sv, uint8_t level, const char *logger,
 
 /* ---- 入口 ---- */
 
-int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
+/* 处理**单条** JSON-RPC 消息（batch 元素或独立消息共用） */
+static int rx_one(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
 {
     bt_mcp_trace(BT_MCP_TRACE_DBG, "l5:rx", json,
                  (uint16_t)(len > 24 ? 24 : len));
@@ -1340,6 +1358,110 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     if (r.has_id)
         return respond_error(sv, &r, BT_MCP_EC_NO_METHOD, "Method not found");
     return BT_MCP_OK;
+}
+
+/* ---- JSON-RPC batch（v0.5 V6）----
+ * 规范演进：batch 在 MCP 2025-03-26 及更早版本中存在，2025-06-18 起被移除。
+ * 因此是否接受取决于**协商到的版本**：
+ *  - 旧版本 → 逐个处理，把非空响应聚合成数组一次发出；
+ *  - 新版本 → 明确回 -32600（"Invalid Request"），而不是静默忽略。 */
+static int batch_supported(const bt_mcp_server_t *sv)
+{
+    static const char *const ok[] = { "2025-03-26", "2024-11-05", "2024-10-07" };
+    if (!sv->proto[0]) return 0;      /* 未协商：按最新处理 */
+    for (unsigned i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (strlen(ok[i]) == strlen(sv->proto)
+            && !memcmp(ok[i], sv->proto, strlen(ok[i]))) return 1;
+    return 0;
+}
+
+/* 在 buf 里从 *pos 起找一个完整 JSON 值（跳过字符串内的括号），返回其长度。
+ * 返回 0 表示找不到完整值。 */
+static int batch_next(const char *buf, uint32_t len, uint32_t pos)
+{
+    while (pos < len && (buf[pos] == ' ' || buf[pos] == '\t'
+                         || buf[pos] == '\r' || buf[pos] == '\n')) pos++;
+    if (pos >= len) return 0;
+    uint32_t start = pos;
+    int depth = 0, instr = 0, esc = 0;
+    for (; pos < len; pos++) {
+        char ch = buf[pos];
+        if (instr) {
+            if (esc) esc = 0;
+            else if (ch == '\\') esc = 1;
+            else if (ch == '"') instr = 0;
+            continue;
+        }
+        if (ch == '"') { instr = 1; continue; }
+        if (ch == '{' || ch == '[') { depth++; continue; }
+        if (ch == '}' || ch == ']') { depth--; continue; }
+        if (ch == ',' && depth == 0) break;   /* 元素结束 */
+    }
+    return (int)(pos - start);
+}
+
+static int rx_batch(bt_mcp_server_t *sv, const char *buf, uint32_t len)
+{
+    if (!batch_supported(sv)) {
+        /* 新版本：batch 已被规范移除 → 明确拒绝 */
+        memsink_t ms = { sv->ebuf, 0, (uint32_t)sizeof sv->ebuf };
+        bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
+        int rc = bt_mcp_w_raw(&w, "{\"jsonrpc\":\"2.0\",\"id\":null,"
+                                   "\"error\":{\"code\":", 
+                              sizeof "{\"jsonrpc\":\"2.0\",\"id\":null,"
+                                     "\"error\":{\"code\":" - 1);
+        char cb[8];
+        int cn = snprintf_int(cb, sizeof cb, BT_MCP_EC_INVALID_REQ);
+        if (!rc) { w.need_comma = 0; rc = bt_mcp_w_raw(&w, cb, (uint32_t)cn); }
+        if (!rc) rc = bt_mcp_w_raw(&w, ",\"message\":",
+                                   sizeof ",\"message\":" - 1);
+        if (!rc) rc = bt_mcp_w_str_lit(&w, "Batch not supported");
+        if (!rc) rc = bt_mcp_w_raw(&w, "}}", 2);
+        if (rc) return rc;
+        return tx_response(sv, sv->ebuf, ms.len);
+    }
+
+    /* 旧版本：逐元素处理，聚合成数组 */
+    sv->batching = 1;
+    sv->bout_len = 0;
+    uint32_t pos = 0;
+    int rc = BT_MCP_OK;
+    /* 跳过外层 '[' */
+    while (pos < len && (buf[pos] == ' ' || buf[pos] == '\n'
+                         || buf[pos] == '\r' || buf[pos] == '\t')) pos++;
+    if (pos < len && buf[pos] == '[') pos++;
+    for (;;) {
+        int elen = batch_next(buf + 0, len, pos);
+        if (elen <= 0) break;
+        int r1 = rx_one(sv, (const uint8_t *)buf + pos, (uint32_t)elen);
+        if (r1 && r1 != BT_MCP_E_PENDING) rc = r1;
+        pos += (uint32_t)elen;
+        while (pos < len && (buf[pos] == ',' || buf[pos] == ' '
+                             || buf[pos] == '\n' || buf[pos] == '\r'
+                             || buf[pos] == '\t')) pos++;
+        if (pos >= len || buf[pos] == ']') break;
+    }
+    sv->batching = 0;
+    if (rc) return rc;
+    if (!sv->bout_len) return BT_MCP_OK;     /* 全是通知：按规范不回响应 */
+    /* 包成数组发出 */
+    static char out[BT_MCP_CFG_BATCH_BUF + 2];
+    out[0] = '[';
+    memcpy(out + 1, sv->bout, sv->bout_len);
+    out[sv->bout_len + 1] = ']';
+    return tx_response(sv, out, sv->bout_len + 2);
+}
+
+int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
+{
+    if (!sv || (!json && len)) return BT_MCP_E_ARGS;
+    /* 跳过前导空白，判断是否为 batch（顶层数组） */
+    uint32_t i = 0;
+    while (i < len && (json[i] == ' ' || json[i] == '\t'
+                       || json[i] == '\r' || json[i] == '\n')) i++;
+    if (i < len && json[i] == '[')
+        return rx_batch(sv, (const char *)json + i, len - i);
+    return rx_one(sv, json, len);
 }
 
 void bt_mcp_server_tick(bt_mcp_server_t *sv, uint32_t now_ms)

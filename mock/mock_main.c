@@ -291,7 +291,7 @@ static int run_pipe(void)
         .prompts = MOCK_PROMPTS,
         .prompts_count = MOCK_PROMPT_COUNT,
         .consent = consent_cb };
-    bt_mcp_server_init(&sv, &se, &cfg, "bt-mcp-device", "0.4");
+    bt_mcp_server_init(&sv, &se, &cfg, "bt-mcp-device", "0.5");
 
     for (;;) {
         uint8_t hdr[2];
@@ -662,7 +662,7 @@ static int run_mcp(const uint8_t *in, size_t in_len)
                                   .prompts = MOCK_PROMPTS,
                                   .prompts_count = MOCK_PROMPT_COUNT,
                                   .consent = consent_cb };
-    if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.4")) return 2;
+    if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.5")) return 2;
 
     int32_t rc = 0;
     while (off < in_len) {
@@ -900,7 +900,7 @@ static int run_e2e(const uint8_t *in, size_t in_len)
                                   .prompts = MOCK_PROMPTS,
                                   .prompts_count = MOCK_PROMPT_COUNT,
                                   .consent = consent_cb };
-    if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.4")) return 2;
+    if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.5")) return 2;
 
     g_pump_sv = &sv;
     memset(&e_c2s, 0, sizeof e_c2s);

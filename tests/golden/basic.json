@@ -35,10 +35,10 @@
           },
           "serverInfo": {
             "name": "bt-mcp-device",
-            "version": "0.4"
+            "version": "0.5"
           },
           "_meta": {
-            "io.btmcp/ver": "0.4",
+            "io.btmcp/ver": "0.5",
             "io.btmcp/chan": {
               "kind": 1,
               "mtu": 244,

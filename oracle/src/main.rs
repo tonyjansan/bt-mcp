@@ -38,6 +38,7 @@ const MAX_FRAG: usize = 255;  /* == BT_MCP_CFG_MAX_FRAG（u8 idx 上限） */
 const MAX_MSG: usize = 8192;
 
 const E_AGAIN: i32 = -1;
+const E_PENDING: i32 = -9;   /* 与 C 的 BT_MCP_E_PENDING 对应（oracle 无异步工具） */
 const E_STATE: i32 = -3;
 const E_TOOBIG: i32 = -4;
 const E_NOMEM: i32 = -5;
@@ -1290,6 +1291,9 @@ struct McpSrv {
     initialized: bool,
     log_level: u8,
     subs: Vec<u16>,
+    proto: String,          /* 协商到的协议版本（v0.5 V6） */
+    batching: bool,
+    bout: Vec<u8>,
 }
 
 fn json_escape(s: &[u8]) -> Vec<u8> {
@@ -1350,12 +1354,22 @@ fn error_json(id: i64, id_str: Option<&[u8]>, code: i32, msg: &str) -> Option<Ve
 fn respond(sv: &mut McpSrv, r: &Req, body: &[u8]) -> i32 {
     let id_str = if r.id_is_str { Some(&r.id_str[..]) } else { None };
     let Some(j) = respond_json(r.id_num, id_str, body) else { return E_TOOBIG; };
+    if sv.batching {
+        if !sv.bout.is_empty() { sv.bout.push(b','); }
+        sv.bout.extend_from_slice(&j);
+        return 0;
+    }
     sv.sess.tx(&j)
 }
 
 fn respond_err(sv: &mut McpSrv, r: &Req, code: i32, msg: &str) -> i32 {
     let id_str = if r.id_is_str { Some(&r.id_str[..]) } else { None };
     let Some(j) = error_json(r.id_num, id_str, code, msg) else { return E_TOOBIG; };
+    if sv.batching {
+        if !sv.bout.is_empty() { sv.bout.push(b','); }
+        sv.bout.extend_from_slice(&j);
+        return 0;
+    }
     sv.sess.tx(&j)
 }
 
@@ -1364,16 +1378,21 @@ fn version_supported(v: &[u8]) -> bool {
         .iter().any(|s| s.as_bytes() == v)
 }
 
-fn body_initialize(sv: &McpSrv, r: &Req) -> Vec<u8> {
+fn body_initialize(sv: &mut McpSrv, r: &Req) -> Vec<u8> {
     let mut b = Vec::new();
     let echo = get_str_value(&r.params, b"protocolVersion")
         .map(|v| v[1..v.len() - 1].to_vec())
         .filter(|v| version_supported(v));
     b.extend_from_slice(b"\"protocolVersion\":");
+    let eff: Vec<u8> = match &echo {
+        Some(v) => v.clone(),
+        None => b"2025-11-25".to_vec(),
+    };
     match echo {
         Some(v) => b.extend_from_slice(&json_escape(&v)),
         None => b.extend_from_slice(b"\"2025-11-25\""),
     }
+    sv.proto = String::from_utf8_lossy(&eff).into_owned();
     b.extend_from_slice(br#","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true}"#);
     /* prompts 恒存在（mock 固定注册 1 个） */
     b.extend_from_slice(b",\"prompts\":{\"listChanged\":true}");
@@ -1382,7 +1401,7 @@ fn body_initialize(sv: &McpSrv, r: &Req) -> Vec<u8> {
     b.extend_from_slice(&json_escape(sv.sess_fw().0.as_bytes()));
     b.extend_from_slice(b",\"version\":");
     b.extend_from_slice(&json_escape(sv.sess_fw().1.as_bytes()));
-    b.extend_from_slice(b"},\"_meta\":{\"io.btmcp/ver\":\"0.4\",\"io.btmcp/chan\":{");
+    b.extend_from_slice(b"},\"_meta\":{\"io.btmcp/ver\":\"0.5\",\"io.btmcp/chan\":{");
     let cap = sv.sess_cap();
     b.extend_from_slice(format!("\"kind\":{},", cap.0).as_bytes());
     b.extend_from_slice(format!("\"mtu\":{},", cap.1).as_bytes());
@@ -1395,7 +1414,7 @@ fn body_initialize(sv: &McpSrv, r: &Req) -> Vec<u8> {
 
 impl McpSrv {
     fn sess_fw(&self) -> (String, String) {
-        ("bt-mcp-device".to_string(), "0.4".to_string())
+        ("bt-mcp-device".to_string(), "0.5".to_string())
     }
     /* (kind, mtu, window, reliable, flow) */
     fn sess_cap(&self) -> (u32, u32, u32, u32, u32) {
@@ -1729,7 +1748,7 @@ fn consent_allows(params: &[u8]) -> bool {
     args.windows(needle.len()).any(|w| w == needle)
 }
 
-fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
+fn rx_one(sv: &mut McpSrv, json: &[u8]) -> i32 {
     let r = match parse_req(json) {
         Ok(r) => r,
         Err(Some(part)) => {
@@ -1854,6 +1873,84 @@ fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
     0
 }
 
+fn batch_supported(sv: &McpSrv) -> bool {
+    matches!(sv.proto.as_str(), "2025-03-26" | "2024-11-05" | "2024-10-07")
+}
+
+/* 与 C 的 batch_next 等价：从 pos 起切一个完整 JSON 值（跳过字符串内括号） */
+fn batch_next(buf: &[u8], pos: usize) -> Option<usize> {
+    let mut p = pos;
+    while p < buf.len() && matches!(buf[p], b' ' | b'\t' | b'\r' | b'\n') { p += 1; }
+    if p >= buf.len() { return None; }
+    let start = p;
+    let mut depth = 0i32;
+    let mut instr = false;
+    let mut esc = false;
+    while p < buf.len() {
+        let ch = buf[p];
+        if instr {
+            if esc { esc = false; }
+            else if ch == b'\\' { esc = true; }
+            else if ch == b'"' { instr = false; }
+            p += 1;
+            continue;
+        }
+        match ch {
+            b'"' => instr = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b',' if depth == 0 => break,
+            _ => {}
+        }
+        p += 1;
+    }
+    if p == start { None } else { Some(p - start) }
+}
+
+fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
+    let mut i = 0usize;
+    while i < json.len() && matches!(json[i], b' ' | b'\t' | b'\r' | b'\n') { i += 1; }
+    if i < json.len() && json[i] == b'[' {
+        return rx_batch(sv, &json[i..]);
+    }
+    rx_one(sv, json)
+}
+
+fn rx_batch(sv: &mut McpSrv, buf: &[u8]) -> i32 {
+    if !batch_supported(sv) {
+        let Some(j) = error_json(0, None, -32600, "Batch not supported")
+            else { return E_TOOBIG; };
+        /* id 用 null：error_json(0,None) 会写 0，这里手工构造 null 版本 */
+        let mut v = Vec::new();
+        v.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":");
+        v.extend_from_slice(&json_escape(b"Batch not supported"));
+        v.extend_from_slice(b"}}");
+        let _ = j;
+        return sv.sess.tx(&v);
+    }
+    sv.batching = true;
+    sv.bout.clear();
+    let mut pos = 0usize;
+    while pos < buf.len() && matches!(buf[pos], b' ' | b'\t' | b'\r' | b'\n' | b'[') { pos += 1; }
+    let mut rc = 0;
+    loop {
+        let Some(elen) = batch_next(buf, pos) else { break; };
+        let r1 = rx_one(sv, &buf[pos..pos + elen]);
+        if r1 != 0 && r1 != E_PENDING { rc = r1; }
+        pos += elen;
+        while pos < buf.len() && matches!(buf[pos], b',' | b' ' | b'\t' | b'\r' | b'\n') { pos += 1; }
+        if pos >= buf.len() || buf[pos] == b']' { break; }
+    }
+    sv.batching = false;
+    if rc != 0 { return rc; }
+    if sv.bout.is_empty() { return 0; }
+    let mut out = Vec::with_capacity(sv.bout.len() + 2);
+    out.push(b'[');
+    out.extend_from_slice(&sv.bout);
+    out.push(b']');
+    sv.sess.tx(&out)
+}
+
 /* ---------------- 驱动模式 ---------------- */
 
 fn load_tools(input: &[u8], off: &mut usize) -> Result<(Vec<McpTool>, usize), i32> {
@@ -1910,7 +2007,9 @@ fn run_mcp(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
     let mut s = Sess::new(packet, mtu);
     s.link_up(0);
     let mut srv = McpSrv { sess: s, tools, initialized: false,
-                           log_level: 1, subs: Vec::new() };
+                           log_level: 1, subs: Vec::new(),
+                           proto: String::new(), batching: false,
+                           bout: Vec::new() };
 
     while off < input.len() {
         let op = input[off]; off += 1;
@@ -2033,7 +2132,8 @@ fn run_e2e(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
     let mut e = E2e {
         cl: Sess::new(packet, mtu),
         sv: McpSrv { sess: Sess::new(packet, mtu), tools, initialized: false,
-                     log_level: 1, subs: Vec::new() },
+                     log_level: 1, subs: Vec::new(), proto: String::new(),
+                     batching: false, bout: Vec::new() },
         c2s: Vec::new(),
         s2c: Vec::new(),
     };

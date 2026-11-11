@@ -121,6 +121,33 @@ def s_error_paths(rng):
 
 
 @scenario
+def s_v05_batch(rng):
+    """v0.5 V6：JSON-RPC batch 按协商版本分支。
+    先协商 2025-03-26（支持 batch）→ batch 逐条响应；
+    再协商 2025-06-18（规范已移除）→ 明确回 -32600。"""
+    old = (b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
+           b'{"protocolVersion":"2025-03-26","capabilities":{}}}')
+    inited = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    batch = (b'[{"jsonrpc":"2.0","id":2,"method":"ping"},'
+             b'{"jsonrpc":"2.0","id":3,"method":"tools/list"}]')
+    only_notif = b'[{"jsonrpc":"2.0","method":"notifications/initialized"}]'
+    bad = b'[{"jsonrpc":"2.0","id":4,"method":"nope"},{"bogus":1}]'
+    return script(0, 0, [(b"echo", b"e")],
+                  [old, inited, batch, only_notif, bad])
+
+
+@scenario
+def s_v05_batch_new(rng):
+    """v0.5 V6：协商到新版本后，batch 必须被明确拒绝（-32600）。"""
+    new = (b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
+           b'{"protocolVersion":"2025-06-18","capabilities":{}}}')
+    inited = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    batch = (b'[{"jsonrpc":"2.0","id":2,"method":"ping"},'
+             b'{"jsonrpc":"2.0","id":3,"method":"ping"}]')
+    return script(0, 0, [(b"echo", b"e")], [new, inited, batch])
+
+
+@scenario
 def s_v04_meta(rng):
     """v0.4：工具元数据 / prompts / 订阅 / 日志分级。"""
     msgs = init_seq() + [
