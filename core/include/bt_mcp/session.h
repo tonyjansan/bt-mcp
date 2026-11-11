@@ -96,6 +96,10 @@ struct bt_mcp_session {
     bt_mcp_storage_t storage;     /* 可空：NVM 持久化钩子 */
     uint8_t          bond;        /* 当前链路是否已绑定 */
     uint32_t         last_rx_ms;  /* 最近一次收到有效 MCP 消息的时间 */
+    /* v0.5 V9 拥塞退避：RTO 指数退避（收到 ACK 回落到基准）。
+     * 默认态等于 ack_tout_ms，因此无丢包时行为与 v0.4 完全一致。 */
+    uint16_t         rto_cur_ms;
+    uint16_t         rto_base_ms;
     uint8_t        resume_pending;
     uint32_t       resume_t0;
     /* RESUME 防爆破 */

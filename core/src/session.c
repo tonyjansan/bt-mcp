@@ -81,6 +81,8 @@ int bt_mcp_session_init(bt_mcp_session_t *s, const bt_mcp_session_cfg_t *cfg)
     if (!s->cfg.tx_window) s->cfg.tx_window = BT_MCP_CFG_MAX_REASM;
     if (!s->cfg.retry_max) s->cfg.retry_max = BT_MCP_CFG_MAX_RETRY;
     if (!s->cfg.ack_tout_ms) s->cfg.ack_tout_ms = BT_MCP_CFG_ACK_TOUT_MS;
+    s->rto_base_ms = s->cfg.ack_tout_ms;
+    s->rto_cur_ms = s->rto_base_ms;
     return BT_MCP_OK;
 }
 
@@ -259,6 +261,8 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
         if (len < 2) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (sl) sl->valid = 0;                   /* 已被对端消费 → 释放重传槽 */
+        /* V9：任何合法 ACK 都证明链路可用 → RTO 回落基准（即使槽已放弃） */
+        s->rto_cur_ms = s->rto_base_ms;
         return BT_MCP_OK;
     }
     case BT_MCP_CTRL_NACK: {
@@ -452,7 +456,7 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
     for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++) {
         struct bt_mcp_tx_slot *sl = &s->txslot[i];
         if (!sl->valid) continue;
-        if (s->now_ms - sl->t0 < s->cfg.ack_tout_ms) continue;
+        if (s->now_ms - sl->t0 < s->rto_cur_ms) continue;
         if (sl->n >= s->cfg.retry_max) {
             bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:drop_after_retries",
                          &sl->seq, 1);
@@ -468,6 +472,12 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
         sl->t0 = s->now_ms;
         if (r) { rc = r; continue; }
         s->stat_tx_retransmit++;
+        /* V9：指数退避——连续超时说明链路拥塞，拉长等待再试，避免重传风暴 */
+        {
+            uint32_t nx = (uint32_t)s->rto_cur_ms * 2u;
+            if (nx > BT_MCP_CFG_RTO_MAX_MS) nx = BT_MCP_CFG_RTO_MAX_MS;
+            s->rto_cur_ms = (uint16_t)nx;
+        }
         bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:retransmit", &sl->seq, 1);
     }
     return rc;

@@ -67,6 +67,7 @@ const TX_RETRY_BYTES: usize = 512;
 const RX_FP_SLOTS: usize = 4;
 const DEDUPE_MS: u32 = 5000;
 const ACK_TOUT: u32 = 600;
+const RTO_MAX: u32 = 4800;   /* v0.5 V9：指数退避上限 */
 const MAX_RETRY: u8 = 3;
 const RESUME_MAX_FAIL: u8 = 3;
 const RESUME_LOCK_MS: u32 = 30000;
@@ -243,7 +244,7 @@ struct Sess {
     txslot: Vec<TxSlot>, txslot_next: usize,
     rx_fp: Vec<RxFp>, rx_fp_next: usize, rx_msg_no: u32,
     consumed: u16, peer_consumed: u16,
-    retry_max: u8, ack_tout: u32,
+    retry_max: u8, ack_tout: u32, rto_cur: u32, rto_base: u32,
     stat_tx_retransmit: u32, stat_tx_dropped: u32, stat_rx_dup: u32,
     now_ms: u32,
     /* 差分输出累积 */
@@ -279,6 +280,7 @@ impl Sess {
                         RX_FP_SLOTS],
             rx_fp_next: 0, rx_msg_no: 0, consumed: 0, peer_consumed: 0,
             retry_max: MAX_RETRY, ack_tout: ACK_TOUT,
+            rto_cur: ACK_TOUT, rto_base: ACK_TOUT,
             stat_tx_retransmit: 0, stat_tx_dropped: 0, stat_rx_dup: 0,
             now_ms: 0,
             wire: Vec::new(), msgs: Vec::new(),
@@ -649,6 +651,7 @@ impl Sess {
             C_ACK => {
                 if pl.len() < 2 { return E_SYNC; }
                 if let Some(p) = self.slot_by_seq(pl[1]) { self.txslot[p].valid = false; }
+                self.rto_cur = self.rto_base;   /* V9：任何合法 ACK 都回落基准 */
                 0
             }
             C_NACK => {
@@ -790,7 +793,7 @@ impl Sess {
         }
         for i in 0..TX_SLOTS {
             if !self.txslot[i].valid { continue; }
-            if self.now_ms.wrapping_sub(self.txslot[i].t0) < self.ack_tout { continue; }
+            if self.now_ms.wrapping_sub(self.txslot[i].t0) < self.rto_cur { continue; }
             if self.txslot[i].n >= self.retry_max {
                 self.txslot[i].valid = false;
                 self.stat_tx_dropped += 1;
@@ -803,6 +806,9 @@ impl Sess {
             self.txslot[i].t0 = self.now_ms;
             if r != 0 { rc = r; continue; }
             self.stat_tx_retransmit += 1;
+            /* V9：指数退避（与 C 同） */
+            let nx = (self.rto_cur as u64 * 2).min(RTO_MAX as u64) as u32;
+            self.rto_cur = nx;
         }
         rc
     }

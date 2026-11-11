@@ -174,8 +174,11 @@ int main(void)
         bt_mcp_session_tick(&se_tx, 1000);
         CHECK(q_bytes(&q) > before, "timeout retransmits whole message");
         CHECK(se_tx.stat_tx_retransmit >= 1, "retransmit counter");
-        /* 重传次数到顶后放弃 */
-        for (int i = 0; i < 10; i++) bt_mcp_session_tick(&se_tx, 1000 + (uint32_t)i * 1000);
+        /* 重传次数到顶后放弃。
+         * 注意 V9 引入指数退避（600→1200→2400→4800），所以要按退避节奏
+         * 给足时间窗，否则看起来「永远不放弃」。 */
+        for (int i = 0; i < 12; i++)
+            bt_mcp_session_tick(&se_tx, se_tx.now_ms + 2000);
         CHECK(se_tx.stat_tx_dropped >= 1, "gives up after retry_max");
     }
 
@@ -299,6 +302,30 @@ int main(void)
         /* 无 storage 时 save 是空操作而不是错误 */
         bt_mcp_session_set_storage(&se_rx, NULL);
         CHECK(bt_mcp_session_save_state(&se_rx) == 0, "save without storage is no-op");
+    }
+
+    /* ---- 14. 拥塞退避（V9）：连续 ACK 超时使 RTO 指数增长，ACK 到达后回落 ---- */
+    {
+        setup(244);
+        CHECK(se_tx.rto_cur_ms == se_tx.rto_base_ms, "rto starts at base");
+        uint16_t base = se_tx.rto_base_ms;
+        int rc = bt_mcp_session_tx(&se_tx, (const uint8_t *)"abc", 3);
+        CHECK(rc == 0, "tx for backoff test");
+        /* 第一次超时重传 → RTO ×2 */
+        bt_mcp_session_tick(&se_tx, base + 1);
+        CHECK(se_tx.stat_tx_retransmit == 1, "first retransmit happened");
+        CHECK(se_tx.rto_cur_ms == (uint16_t)(base * 2), "rto doubled after 1st timeout");
+        /* 第二次超时 → ×4 */
+        bt_mcp_session_tick(&se_tx, base * 2 + base + 2);
+        CHECK(se_tx.rto_cur_ms == (uint16_t)(base * 4), "rto doubled again");
+        /* 继续直到上限 */
+        for (int k = 0; k < 10; k++)
+            bt_mcp_session_tick(&se_tx, se_tx.now_ms + 10000);
+        CHECK(se_tx.rto_cur_ms <= BT_MCP_CFG_RTO_MAX_MS, "rto capped at max");
+        /* ACK 到达 → 回落基准（必须 ACK 真实槽位的 seq，否则匹配不到槽） */
+        uint8_t ack[2] = { BT_MCP_CTRL_ACK, se_tx.txslot[0].seq };
+        bt_mcp_session_rx(&se_tx, BT_MCP_KIND_CTRL, 0, ack, 2, NULL, NULL);
+        CHECK(se_tx.rto_cur_ms == base, "rto reset to base after ACK");
     }
 
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
