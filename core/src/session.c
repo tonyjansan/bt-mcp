@@ -103,6 +103,9 @@ static void clear_reliability(bt_mcp_session_t *s)
     memset(s->rx_fp, 0, sizeof s->rx_fp);
     s->txslot_next = 0;
     s->rx_fp_next = 0;
+    s->rx_msg_no = 0;
+    s->consumed = 0;
+    s->peer_consumed = 0;
     if (s->fr) bt_mcp_framer_reset(s->fr);
 }
 
@@ -164,6 +167,9 @@ static int rx_dup_check(bt_mcp_session_t *s, uint8_t seq,
         if (!fp->valid) continue;
         if (fp->seq != seq || fp->len != len || fp->crc != crc) continue;
         if (s->now_ms - fp->t > BT_MCP_CFG_DEDUPE_MS) continue;  /* 窗口外不复用 */
+        /* 代次护栏：seq 是 u8，256 条后会同号。只有「最近 8 条」内的同号同内容
+         * 才算重传；否则视为合法的重复内容消息（例如重复的传感器通知）。 */
+        if (s->rx_msg_no - fp->msg_no > 8) continue;
         return 1;
     }
     struct bt_mcp_rx_fp *fp = &s->rx_fp[s->rx_fp_next % BT_MCP_CFG_RX_FP_SLOTS];
@@ -173,6 +179,7 @@ static int rx_dup_check(bt_mcp_session_t *s, uint8_t seq,
     fp->len = len;
     fp->crc = crc;
     fp->t = s->now_ms;
+    fp->msg_no = s->rx_msg_no++;
     return 0;
 }
 
@@ -218,11 +225,15 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
     if (len < 1) return BT_MCP_E_SYNC;
     uint8_t type = pl[0];
     switch (type) {
-    case BT_MCP_CTRL_CREDIT: {                   /* u16 credits 增量回补（饱和） */
-        if (s->state != BT_MCP_S_READY) return BT_MCP_E_STATE;
+    case BT_MCP_CTRL_CREDIT: {
+        /* 累计回补：载荷 = 对端「已消费总条数」（u16，回绕安全）。
+         * 用累计值而非 delta，单个 CREDIT 丢失可被下一个自愈（v0.3 修）。
+         * 握手期（LINK_UP）也允许——initialize 响应同样占信用。 */
         if (len < 3) return BT_MCP_E_SYNC;
-        uint32_t add = (uint32_t)(pl[1] | (pl[2] << 8));
-        uint32_t cur = (uint32_t)s->credits + add;
+        uint16_t total = (uint16_t)(pl[1] | (pl[2] << 8));
+        uint16_t delta = (uint16_t)(total - s->peer_consumed);
+        s->peer_consumed = total;
+        uint32_t cur = (uint32_t)s->credits + delta;
         s->credits = (uint8_t)(cur > 255u ? 255u : cur);
         return BT_MCP_OK;
     }
@@ -239,14 +250,12 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
         return tx_frame(s, BT_MCP_KIND_CTRL, pong, 2);
     }
     case BT_MCP_CTRL_ACK: {
-        if (s->state != BT_MCP_S_READY) return BT_MCP_E_STATE;
         if (len < 2) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (sl) sl->valid = 0;                   /* 已被对端消费 → 释放重传槽 */
         return BT_MCP_OK;
     }
     case BT_MCP_CTRL_NACK: {
-        if (s->state != BT_MCP_S_READY) return BT_MCP_E_STATE;
         if (len < 3) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (!sl || !s->fr || !s->emit) return BT_MCP_OK;   /* 无槽可补：交给对端超时 */
@@ -310,7 +319,7 @@ int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
     /* MCP 消息：READY 前只放行 initialize（判例 1） */
     if (s->state == BT_MCP_S_LINK_UP) {
         if (len < 9 || (memcmp(payload, "initialize", 9)
-            && memcmp(payload, "\"initialize", 11)
+            && !(len >= 11 && !memcmp(payload, "\"initialize", 11))
             && memcmp(payload, "{\"jsonrpc", 9))) {
             /* 粗门：L5 会做 JSON 级判定，这里只挡明显越权流量 */
             return BT_MCP_E_STATE;
@@ -322,20 +331,21 @@ int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
         int dup = rx_dup_check(s, seq, payload, len);
         if (dup) {
             s->stat_rx_dup++;
-            if (s->state == BT_MCP_S_READY) send_ack(s, seq);  /* 重 ACK，不再上抛 */
+            send_ack(s, seq);                    /* 重 ACK，不再上抛 */
             return BT_MCP_OK;
         }
     }
 
     if (mcp_sink) mcp_sink(user, payload, len);
-    if (s->state == BT_MCP_S_READY) {
-        /* 判例 3：消费即回补信用；判例 5：消费即 ACK */
-        if (chan_credit(s)) {
-            uint8_t one[2] = { 1, 0 };
-            ctrl_frame(s, BT_MCP_CTRL_CREDIT, one, 2);
-        }
-        if (chan_unreliable(s)) send_ack(s, seq);
+    /* 判例 3/5：消费即回补信用、消费即 ACK。LINK_UP 期同样要做——
+     * 握手消息（initialize 响应/initialized）也占对端窗口，漏补会永久少一格。 */
+    if (chan_credit(s)) {
+        s->consumed++;
+        uint8_t cum[2] = { (uint8_t)(s->consumed & 0xFF),
+                           (uint8_t)(s->consumed >> 8) };
+        ctrl_frame(s, BT_MCP_CTRL_CREDIT, cum, 2);
     }
+    if (chan_unreliable(s)) send_ack(s, seq);
     return BT_MCP_OK;
 }
 
@@ -344,15 +354,13 @@ int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
     if (!s || (!json && len)) return BT_MCP_E_ARGS;
     if (s->state != BT_MCP_S_READY && s->state != BT_MCP_S_LINK_UP)
         return BT_MCP_E_STATE;
-    if (chan_credit(s)) {
-        if (s->credits == 0) return BT_MCP_E_AGAIN;   /* 判例 3 */
-        s->credits--;
-    }
+    if (chan_credit(s) && s->credits == 0) return BT_MCP_E_AGAIN;   /* 判例 3 */
 
     uint8_t seq = bt_mcp_framer_alloc_seq(s->fr);
     int rc = bt_mcp_framer_send_seq(s->fr, BT_MCP_KIND_MCP, seq, json, len,
                                     s->emit, s->io);
-    if (rc) return rc;
+    if (rc) return rc;               /* 没上线就不扣信用（v0.3 修信用泄漏） */
+    if (chan_credit(s)) s->credits--;
 
     /* 判例 5：不可靠包通道登记重传槽（放不下就放弃保护，仍照常发送） */
     if (chan_unreliable(s) && len && len <= BT_MCP_CFG_TX_RETRY_BYTES) {
@@ -439,6 +447,8 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
         if (sl->n >= s->cfg.retry_max) {
             sl->valid = 0;
             s->stat_tx_dropped++;
+            /* 该消息确认永久丢失：退还发送时扣掉的信用，否则窗口单调泄漏 */
+            if (chan_credit(s) && s->credits < 255) s->credits++;
             continue;
         }
         int r = bt_mcp_framer_send_seq(s->fr, BT_MCP_KIND_MCP, sl->seq,

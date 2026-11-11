@@ -19,9 +19,11 @@
 #define BT_MCP_CFG_FRAG_TOUT_MS  2000   /* 半帧滞留回收时限 */
 #endif
 #ifndef BT_MCP_CFG_MAX_FRAG
-/* 单消息分片上限：须能装下 MAX_MSG（8KB/255B=33 → 取 34）。
- * v0.2 的 32 会让 8161..8192B 的消息在 MTU 261 时假性 E_TOOBIG（v0.3 修正）。 */
-#define BT_MCP_CFG_MAX_FRAG      34
+/* 单消息分片上限：idx 是 u8，故上限 255。v0.2 的 32 会让 8161..8192B 的消息
+ * 在 MTU 261 时假性 E_TOOBIG；v0.3 起放到 255，使「MAX_MSG 可达」与
+ * 「小 MTU 通道也能装下档位消息」同时成立（8KB 在 23B ATT_MTU 下需 586 片，
+ * 仍受 255 限制——这是 u8 idx 的硬上限，文档已注明）。 */
+#define BT_MCP_CFG_MAX_FRAG      255
 #endif
 
 /* ---- 发送面：不可靠包通道的消息级重传 ---- */
@@ -32,7 +34,10 @@
 #define BT_MCP_CFG_TX_RETRY_BYTES 512   /* 每槽消息体容量；超出者不享重传保护 */
 #endif
 #ifndef BT_MCP_CFG_RX_FP_SLOTS
-#define BT_MCP_CFG_RX_FP_SLOTS   2      /* 去重指纹窗口（seq+len+CRC32，不存消息体） */
+/* 去重指纹窗口：必须 ≥ 发送窗口（tx_window），否则「4 条在途 + ACK 全丢」
+ * 时前几条的指纹已被挤出，重传会被当作新消息二次上抛（重复执行工具）。
+ * 默认 4 与 tx_window 默认值对齐。 */
+#define BT_MCP_CFG_RX_FP_SLOTS   4      /* 指纹项：seq+len+CRC32+代次，不存消息体 */
 #endif
 #ifndef BT_MCP_CFG_ACK_TOUT_MS
 #define BT_MCP_CFG_ACK_TOUT_MS   600    /* 单次等待 ACK 时限 */
@@ -82,6 +87,12 @@
 #endif
 #if BT_MCP_CFG_MAX_MSG < 64
 #  error "BT_MCP_CFG_MAX_MSG too small to carry a minimal MCP message"
+#endif
+#if BT_MCP_CFG_RX_FP_SLOTS < 1 || BT_MCP_CFG_RX_FP_SLOTS > 16
+#  error "BT_MCP_CFG_RX_FP_SLOTS must be 1..16"
+#endif
+#if BT_MCP_CFG_MAX_FRAG < 1 || BT_MCP_CFG_MAX_FRAG > 255
+#  error "BT_MCP_CFG_MAX_FRAG must be 1..255 (u8 idx)"
 #endif
 #if BT_MCP_CFG_MAX_REASM < 1 || BT_MCP_CFG_MAX_REASM > 8
 #  error "BT_MCP_CFG_MAX_REASM must be 1..8 (max_pending is a 4-bit field)"

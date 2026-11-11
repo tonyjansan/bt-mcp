@@ -29,19 +29,37 @@
 #endif
 
 #if BT_MCP_TIER == BT_MCP_TIER_COMPACT
-#  define BT_MCP_CFG_MAX_MSG        1024
-#  define BT_MCP_CFG_MAX_REASM      2
-#  define BT_MCP_CFG_TX_RETRY_BYTES 256
-#  define BT_MCP_CFG_MAX_FRAG       34
-#  define BT_MCP_CFG_PAGE_SIZE      4
-#  define BT_MCP_CFG_NOTIFY_BUF     256
+#  ifndef BT_MCP_CFG_MAX_MSG
+#    define BT_MCP_CFG_MAX_MSG 1024
+#  endif
+#  ifndef BT_MCP_CFG_MAX_REASM
+#    define BT_MCP_CFG_MAX_REASM 2
+#  endif
+#  ifndef BT_MCP_CFG_TX_RETRY_BYTES
+#    define BT_MCP_CFG_TX_RETRY_BYTES 256
+#  endif
+#  ifndef BT_MCP_CFG_PAGE_SIZE
+#    define BT_MCP_CFG_PAGE_SIZE 4
+#  endif
+#  ifndef BT_MCP_CFG_NOTIFY_BUF
+#    define BT_MCP_CFG_NOTIFY_BUF 256
+#  endif
 #elif BT_MCP_TIER == BT_MCP_TIER_STANDARD
-#  define BT_MCP_CFG_MAX_MSG        2048
-#  define BT_MCP_CFG_MAX_REASM      4
-#  define BT_MCP_CFG_TX_RETRY_BYTES 512
-#  define BT_MCP_CFG_MAX_FRAG       34
-#  define BT_MCP_CFG_PAGE_SIZE      6
-#  define BT_MCP_CFG_NOTIFY_BUF     384
+#  ifndef BT_MCP_CFG_MAX_MSG
+#    define BT_MCP_CFG_MAX_MSG 2048
+#  endif
+#  ifndef BT_MCP_CFG_MAX_REASM
+#    define BT_MCP_CFG_MAX_REASM 4
+#  endif
+#  ifndef BT_MCP_CFG_TX_RETRY_BYTES
+#    define BT_MCP_CFG_TX_RETRY_BYTES 512
+#  endif
+#  ifndef BT_MCP_CFG_PAGE_SIZE
+#    define BT_MCP_CFG_PAGE_SIZE 6
+#  endif
+#  ifndef BT_MCP_CFG_NOTIFY_BUF
+#    define BT_MCP_CFG_NOTIFY_BUF 384
+#  endif
 #elif BT_MCP_TIER == BT_MCP_TIER_FULL
    /* 走 config.h 的默认值（8KB / 4 槽 / 512B 重传槽） */
 #else

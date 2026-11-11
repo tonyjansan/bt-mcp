@@ -62,6 +62,7 @@ struct bt_mcp_rx_fp {
     uint16_t len;
     uint32_t crc;
     uint32_t t;
+    uint32_t msg_no;      /* 注册时的消息计次：只对「最近几条」做去重判定 */
 };
 
 struct bt_mcp_session {
@@ -99,6 +100,10 @@ struct bt_mcp_session {
     /* ---- v0.3：接收去重指纹窗口 ---- */
     struct bt_mcp_rx_fp rx_fp[BT_MCP_CFG_RX_FP_SLOTS];
     uint8_t        rx_fp_next;
+    uint32_t       rx_msg_no;         /* 单调消息计次（去重代次） */
+    /* ---- v0.3：累计信用（CREDIT 丢失可自愈） ---- */
+    uint16_t       consumed;          /* 本端已消费给对端的累计条数 */
+    uint16_t       peer_consumed;     /* 对端已消费我方的累计条数（CREDIT 载荷） */
     /* 统计（port/应用可读） */
     uint32_t       stat_tx_retransmit;
     uint32_t       stat_tx_dropped;

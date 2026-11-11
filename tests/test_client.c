@@ -234,6 +234,34 @@ int main(void)
     CHECK(ev_count == 1 && last_ev.is_error, "unknown method → error event");
     CHECK(last_ev.error_code == -32601, "error code -32601");
 
+    /* 6a. 未先发 initialize 时，任何响应都不得把客户端判成「已握手」 */
+    {
+        bt_mcp_client_t c2;
+        bt_mcp_session_t s2;
+        bt_mcp_session_cfg_t c2cfg = { .req_timeout_ms = 30000, .resume_tout_ms = 5000,
+                                       .tx_window = 4, .role = BT_MCP_ROLE_CLIENT };
+        static bt_mcp_framer_t f2;
+        static vec_t w2;
+        bt_mcp_framer_init(&f2, &(bt_mcp_frame_cfg_t){4, 2000}, &cap);
+        bt_mcp_session_init(&s2, &c2cfg);
+        memset(&w2, 0, sizeof w2);
+        bt_mcp_session_bind(&s2, &f2, c_put, &w2);
+        bt_mcp_session_link_up(&s2, 0);
+        bt_mcp_session_mark_ready(&s2);
+        bt_mcp_client_init(&c2, &s2, on_event, NULL);
+        /* 直接发 tools/list（跳过 initialize）并伪造其响应 */
+        uint32_t rid = 0;
+        bt_mcp_client_list_tools(&c2, NULL, &rid);
+        s2.consumed = s2.consumed;   /* no-op，保持可读性 */
+        char resp[256];
+        snprintf(resp, sizeof resp,
+                 "{\"jsonrpc\":\"2.0\",\"id\":%u,\"result\":{\"tools\":[]}}",
+                 (unsigned)rid);
+        bt_mcp_client_rx(&c2, (const uint8_t *)resp, (uint32_t)strlen(resp));
+        CHECK(c2.initialized == 0, "non-initialize response must not mark initialized");
+        CHECK(bt_mcp_session_state(&s2) == BT_MCP_S_READY, "state untouched");
+    }
+
     /* 6. 超时 */
     ev_count = 0;
     bt_mcp_client_tick(&cl, 0);

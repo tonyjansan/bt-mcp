@@ -46,6 +46,7 @@ struct bt_mcp_client {
     uint32_t           req_timeout_ms;
     uint32_t           now_ms;
     uint8_t            initialized;
+    uint32_t           init_id;        /* initialize 的请求 id（0=未发起） */
     bt_mcp_client_req_t req[BT_MCP_CFG_MAX_PENDING];
 };
 

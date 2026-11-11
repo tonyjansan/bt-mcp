@@ -107,7 +107,10 @@ int bt_mcp_client_initialize(bt_mcp_client_t *c, const char *client_name,
         client_name ? client_name : "bt-mcp-bridge",
         client_version ? client_version : "0.3");
     if (n < 0 || (size_t)n >= sizeof params) return BT_MCP_E_TOOBIG;
-    return send_request(c, "initialize", params, (uint32_t)n, NULL);
+    uint32_t id = 0;
+    int rc = send_request(c, "initialize", params, (uint32_t)n, &id);
+    if (rc == 0) { c->init_id = id; c->initialized = 0; }
+    return rc;
 }
 
 int bt_mcp_client_list_tools(bt_mcp_client_t *c, const char *cursor, uint32_t *out_id)
@@ -192,11 +195,12 @@ int bt_mcp_client_rx(bt_mcp_client_t *c, const uint8_t *json, uint32_t len)
     }
     ev.id = slot->id;
 
+    /* 只有「本次 initialize 请求」的响应才算握手完成（v0.3 修：
+     * 旧实现把任何首个成功响应都当 initialize 响应，会误判握手完成） */
     int is_init = 0;
-    if (r.method == NULL) {
-        /* 本端刚发的 initialize：响应到达 → 记状态并补发 initialized 通知 */
-        if (c->sess && !c->initialized && (!ev.is_error)) is_init = 1;
-    }
+    if (c->init_id != 0 && !c->initialized && !ev.is_error
+        && slot->id == c->init_id)
+        is_init = 1;
     slot->in_use = 0;
 
     if (c->cb) c->cb(c->cb_user, &ev);

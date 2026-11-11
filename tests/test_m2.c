@@ -124,13 +124,16 @@ static bt_mcp_session_t g_se_s;
 static bt_mcp_server_t  g_sv;
 static vec_t            g_wire_s2c;
 
-/* 模拟 Host 侧消费完响应后回补信用（真实链路上由对端 session 自动发） */
+/* 模拟 Host 侧消费完响应后回补信用（真实链路由对端 session 自动发）。
+ * CREDIT 载荷是「累计已消费条数」，故必须单调递增——发固定值会让 delta=0。 */
+static uint16_t g_host_consumed;
 static void host_topup(void)
 {
-    uint8_t cr[3] = { BT_MCP_CTRL_CREDIT, 0, 0 };   /* u16 LE：256 不够就分两次 */
-    uint8_t a[3] = { BT_MCP_CTRL_CREDIT, 8, 0 };
+    g_host_consumed = (uint16_t)(g_host_consumed + 8);
+    uint8_t a[3] = { BT_MCP_CTRL_CREDIT,
+                     (uint8_t)(g_host_consumed & 0xFF),
+                     (uint8_t)(g_host_consumed >> 8) };
     bt_mcp_session_rx(&g_se_s, BT_MCP_KIND_CTRL, 0, a, 3, NULL, NULL);
-    (void)cr;
 }
 
 static void reset_wires(void) { g_wire_s2c.len = 0; host_topup(); }
@@ -377,7 +380,8 @@ int main(void)
         CHECK(!vec_has(&g_wire_s2c, "\"result\""), "no result yet (async)");
         reset_wires();
 
-        /* 完成 → 发响应 */
+        /* 完成 → 发响应（先回补信用：真实链路由对端自动发 CREDIT） */
+        host_topup();
         rc = bt_mcp_server_complete(g_async_call, "done", 0);
         CHECK(rc == 0, "complete sends result");
         CHECK(vec_has(&g_wire_s2c, "\"text\":\"done\""), "async result text");
@@ -385,6 +389,7 @@ int main(void)
         reset_wires();
 
         /* 取消：再挂起一次，cancelled 后 complete 不发任何字节 */
+        host_topup();
         bt_mcp_server_rx(&g_sv, (const uint8_t *)c, (uint32_t)strlen(c));
         reset_wires();
         const char *cx = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\","

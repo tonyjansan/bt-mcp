@@ -78,6 +78,22 @@ static int esc_put(void *sink, const char *data, uint32_t len)
     return 0;
 }
 
+/* int → 十进制字符串（避免 stdio 依赖） */
+static int snprintf_int(char *buf, uint32_t cap, int v)
+{
+    char tmp[16];
+    uint32_t t = 0, n = 0;
+    unsigned u;
+    if (v < 0) { if (n < cap) buf[n++] = '-'; u = (unsigned)(-(v + 1)) + 1u; }
+    else u = (unsigned)v;
+    if (u == 0) { if (n < cap) buf[n++] = '0'; }
+    else {
+        while (u) { tmp[t++] = (char)('0' + (u % 10)); u /= 10; }
+        while (t && n < cap) buf[n++] = tmp[--t];
+    }
+    return (int)n;
+}
+
 /* ---- writer 手工键值（支持非 NUL 结尾切片） ---- */
 static int kv_open(bt_mcp_writer_t *w, const char *key)
 {
@@ -173,9 +189,31 @@ static int respond(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
     return tx_response(sv, g_rbuf, ms.len);
 }
 
+/* id 不可回显（超长字符串 id / 无法解析）时按 JSON-RPC 规范回 "id":null */
+static int respond_error_null_id(bt_mcp_server_t *sv, int code, const char *msg)
+{
+    static char ebuf[256];
+    memsink_t ms = { ebuf, 0, sizeof ebuf };
+    bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
+    char head[64];
+    int n = snprintf_int(head, sizeof head, code);
+    int rc = bt_mcp_w_raw(&w, "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":"
+                               "{\"code\":", sizeof "{\"jsonrpc\":\"2.0\",\"id\":null,"
+                               "\"error\":{\"code\":" - 1);
+    if (!rc) { w.need_comma = 0; rc = bt_mcp_w_raw(&w, head, (uint32_t)n); }
+    if (!rc) rc = bt_mcp_w_raw(&w, ",\"message\":", sizeof ",\"message\":" - 1);
+    if (!rc) rc = bt_mcp_w_str_lit(&w, msg);
+    if (!rc) rc = bt_mcp_w_raw(&w, "}}", 2);
+    if (rc) return rc;
+    return tx_response(sv, ebuf, ms.len);
+}
+
 static int respond_error(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
                          int code, const char *msg)
 {
+    /* 超长字符串 id 无法安全回显：改用 null id + -32600（Invariant: 必发响应） */
+    if (r->id_is_str && r->id_str_len >= BT_MCP_CFG_IDSTR_MAX)
+        return respond_error_null_id(sv, -32600, "Invalid request id");
     static char ebuf[288];
     memsink_t ms = { ebuf, 0, sizeof ebuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
@@ -229,7 +267,17 @@ int bt_mcp_call_progress(bt_mcp_call_t *c, uint64_t done, uint64_t total)
                                "\"notifications/progress\",\"params\":{",
                           sizeof "{\"jsonrpc\":\"2.0\",\"method\":"
                                  "\"notifications/progress\",\"params\":{" - 1);
-    if (!rc) rc = kv_u32_new(&w, "progressToken", (uint32_t)c->progress_token);
+    if (c->progress_is_str) {
+        if (!rc) rc = kv_open(&w, "progressToken");
+        if (!rc) {
+            int r2 = bt_mcp_w_raw(&w, "\"", 1);
+            if (!r2) r2 = bt_mcp_w_raw(&w, c->progress_str, c->progress_str_len);
+            if (!r2) r2 = bt_mcp_w_raw(&w, "\"", 1);
+            if (r2) rc = r2;
+        }
+    } else if (!rc) {
+        rc = kv_u32_new(&w, "progressToken", (uint32_t)c->progress_token);
+    }
     if (!rc) rc = bt_mcp_w_kv_u64(&w, "progress", done);
     if (!rc) rc = bt_mcp_w_kv_u64(&w, "total", total);
     if (!rc) rc = bt_mcp_w_raw(&w, "}}", 2);
@@ -277,6 +325,9 @@ static int send_tool_result(bt_mcp_server_t *sv, const bt_mcp_call_t *c,
 int bt_mcp_server_complete(bt_mcp_call_t *c, const char *text, int is_error)
 {
     if (!c || !c->in_use || !c->srv) return BT_MCP_E_ARGS;
+    /* 回调内同步 complete 会与 respond() 争用同一块静态响应缓冲（g_rbuf），
+     * 且一次调用会产生两个响应——直接拒绝，要求走 E_PENDING 异步路径。 */
+    if (c->in_callback) return BT_MCP_E_STATE;
     uint32_t n = 0;
     if (text) while (text[n]) n++;
     int rc = 0;
@@ -549,9 +600,18 @@ static int body_tool_call(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void *
     bt_mcp_json_req_t meta;
     if (!bt_mcp_json_get_sub(r, "_meta", &meta)) {
         uint32_t pt;
+        const char *ps; uint16_t psl;
         if (!bt_mcp_json_get_u32(&meta, "progressToken", &pt)) {
             c->has_progress = 1;
             c->progress_token = pt;
+        } else if (!bt_mcp_json_get_str(&meta, "progressToken", &ps, &psl)
+                   && psl < sizeof c->progress_str) {
+            /* 字符串 token：保存原文段（含转义），回显时原样写出 */
+            memcpy(c->progress_str, ps, psl);
+            c->progress_str[psl] = 0;
+            c->progress_str_len = psl;
+            c->has_progress = 1;
+            c->progress_is_str = 1;
         }
     }
     c->t0 = sv->now_ms;
@@ -561,7 +621,9 @@ static int body_tool_call(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void *
     int trc = BT_MCP_E_ARGS;
     if (!rc) {
         bt_mcp_writer_t tw = { .put = esc_put, .sink = &es, .need_comma = 0 };
+        c->in_callback = 1;
         trc = found->fn(&treq, &tw, c, found->user);
+        c->in_callback = 0;
     }
     if (trc == BT_MCP_E_PENDING) return BT_MCP_E_PENDING;  /* 槽保持占用 */
     call_free(c);
@@ -601,6 +663,12 @@ static int handle_cancelled(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r)
             if (rid[0] != '"' || memcmp(rid + 1, c->id_str, c->id_str_len)) continue;
         } else {
             if (rl == 0 || rid[0] == '"') continue;
+            /* 必须整段是数字：避免 "1.5" 被截成 1 误取消 */
+            uint32_t k = (rid[0] == '-' || rid[0] == '+') ? 1 : 0;
+            int all_digit = (k < rl);
+            for (uint32_t q = k; q < rl; q++)
+                if (rid[q] < '0' || rid[q] > '9') { all_digit = 0; break; }
+            if (!all_digit) continue;
             if (parse_i64_local(rid, rl) != c->id_num) continue;
         }
         c->cancelled = 1;

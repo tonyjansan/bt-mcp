@@ -56,6 +56,7 @@ void bt_mcp_framer_reset(bt_mcp_framer_t *f)
     f->s_hdr_got = 0;
     f->s_len_got = 0;
     f->s_active = 0;
+    f->s_fcs_got = 0;
     f->nack_pending = 0;
 }
 
@@ -75,9 +76,9 @@ static uint16_t crc_cont(const uint8_t *p, uint32_t n, uint16_t crc)
 
 /* ---- 发送侧 ---- */
 
-/* 发一片：hdr + payload (+fcs) 一次性交给 emit。
- * 判例：包通道一个 notify / 流通道一次 write 都是一个完整分片——port 层
- * 不需要再做「头一次回调、载荷再一次回调」的聚合（v0.3 修掉的集成坑）。 */
+/* 发一片。线序固定为 hdr(6) | FCS(2, 可选) | payload —— 与接收侧解析一致。
+ * 包通道片载荷 ≤255B，恒可一次 emit；流通道大帧分两次（头+校验 / 载荷），
+ * 字节流语义下等价。判例：一个分片 = 一次 emit（GATT notify 边界）。 */
 static int emit_chunk(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
                       uint8_t idx, uint8_t nfrag, uint16_t chunk,
                       const uint8_t *payload, uint32_t len,
@@ -90,7 +91,7 @@ static int emit_chunk(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
     const uint8_t flags = (uint8_t)((kind == BT_MCP_KIND_CTRL ? BT_MCP_FLAG_CTRL : 0)
                           | (nfrag > 1 ? BT_MCP_FLAG_CHUNK : 0)
                           | (idx == nfrag - 1 ? BT_MCP_FLAG_LAST : 0));
-    uint8_t out[BT_MCP_HDR_LEN + BT_MCP_MAX_CHUNK_PAYLOAD + 2];
+    uint8_t out[BT_MCP_HDR_LEN + 2 + BT_MCP_MAX_CHUNK_PAYLOAD];
     uint16_t n = 0;
     out[n++] = BT_MCP_MAGIC;
     out[n++] = flags;
@@ -98,26 +99,19 @@ static int emit_chunk(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
     out[n++] = idx;
     out[n++] = (uint8_t)(plen & 0xFF);
     out[n++] = (uint8_t)(plen >> 8);
-    /* 包通道片载荷 ≤255B，恒可一 emit 完成；流通道单帧可达 8KB，
-     * 超出栈缓冲时分两次 emit（字节流语义下无边界含义）。 */
-    const int one_shot = (uint32_t)n + plen + (BT_MCP_CFG_FCS16 ? 2u : 0u)
-                         <= (uint32_t)sizeof out;
-    if (plen && one_shot) {
-        memcpy(out + n, payload + done, plen);
-        n = (uint16_t)(n + plen);
-    }
 #if BT_MCP_CFG_FCS16
     uint16_t crc = crc_cont(out, BT_MCP_HDR_LEN, 0xFFFF);
     crc = crc_cont(payload + done, plen, crc);
     out[n++] = (uint8_t)(crc & 0xFF);
     out[n++] = (uint8_t)(crc >> 8);
 #endif
-    int rc = emit(io, out, n);       /* 透传 port 背压码（E_NOMEM/E_AGAIN） */
-    if (!rc && plen && !one_shot) {
-        rc = emit(io, payload + done, plen);   /* 大帧剩余载荷 */
-        /* 注：FCS 已在 out[] 里紧跟帧头，大帧第二段只送载荷，接收侧按
-           「hdr | fcs | payload」解析，与一次性送出等价。 */
+    const int one_shot = (uint32_t)n + plen <= (uint32_t)sizeof out;
+    if (plen && one_shot) {
+        memcpy(out + n, payload + done, plen);
+        n = (uint16_t)(n + plen);
     }
+    int rc = emit(io, out, n);       /* 透传 port 背压码（E_NOMEM/E_AGAIN） */
+    if (!rc && plen && !one_shot) rc = emit(io, payload + done, plen);
     return rc ? rc : BT_MCP_OK;
 }
 
@@ -269,6 +263,16 @@ static int feed_packet(bt_mcp_framer_t *f, const uint8_t *frag, uint16_t len,
 
 /* ---- 接收侧：流通道（任意字节段） ---- */
 
+/* 流通道畸形帧：丢弃当前帧状态并重新找 magic（v0.3 修「一次坏帧永久卡死」） */
+static int stream_desync(bt_mcp_framer_t *f)
+{
+    f->s_active = 0;
+    f->s_hdr_got = 0;
+    f->s_len_got = 0;
+    f->s_fcs_got = 0;
+    return BT_MCP_E_SYNC;
+}
+
 static int feed_stream(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
                        bt_mcp_msg_sink_t sink, void *user)
 {
@@ -286,6 +290,7 @@ static int feed_stream(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
                 continue;
             }
             f->s_len_got = 0;
+            f->s_fcs_got = 0;
             f->s_active = 1;
         }
 
@@ -295,10 +300,19 @@ static int feed_stream(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
         /* 流通道：单帧承载整条消息（CHUNKED=0），plen 上限 = MAX_MSG；
            CTRL 帧仍恒 ≤255（判例）。 */
         if ((flags & BT_MCP_FLAG_CTRL) && plen > BT_MCP_CTRL_MAX_PAYLOAD)
-            return BT_MCP_E_SYNC;
-        if (plen > BT_MCP_CFG_MAX_MSG) return BT_MCP_E_SYNC;
+            return stream_desync(f);
+        if (plen > BT_MCP_CFG_MAX_MSG) return stream_desync(f);
         if (f->s_len_got + (uint32_t)plen > BT_MCP_CFG_MAX_MSG)
-            return BT_MCP_E_SYNC;
+            return stream_desync(f);
+        if (flags & BT_MCP_FLAG_CHUNK) return stream_desync(f);
+
+#if BT_MCP_CFG_FCS16
+        while (f->s_fcs_got < 2 && len) {
+            f->s_fcs[f->s_fcs_got++] = *in++;
+            len--;
+        }
+        if (f->s_fcs_got < 2) return BT_MCP_OK;
+#endif
 
         uint16_t take = (uint16_t)(plen - f->s_len_got);
         if (take > len) take = len;
@@ -307,11 +321,18 @@ static int feed_stream(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
         in += take; len -= take;
         if (f->s_len_got < plen) return BT_MCP_OK;
 
-        if (flags & BT_MCP_FLAG_CHUNK) return BT_MCP_E_SYNC;
+#if BT_MCP_CFG_FCS16
+        {
+            uint16_t want = crc_cont(f->s_hdr, BT_MCP_HDR_LEN, 0xFFFF);
+            want = crc_cont(f->s_cur, plen, want);
+            if (f->s_fcs[0] != (want & 0xFF) || f->s_fcs[1] != (want >> 8))
+                return stream_desync(f);
+        }
+#endif
         sink(user, (flags & BT_MCP_FLAG_CTRL) ? BT_MCP_KIND_CTRL
                                               : BT_MCP_KIND_MCP,
              seq, f->s_cur, plen);
-        f->s_active = 0; f->s_hdr_got = 0; f->s_len_got = 0;
+        f->s_active = 0; f->s_hdr_got = 0; f->s_len_got = 0; f->s_fcs_got = 0;
     }
     return BT_MCP_OK;
 }

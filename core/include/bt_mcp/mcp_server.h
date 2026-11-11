@@ -73,12 +73,16 @@ struct bt_mcp_call {
     bt_mcp_server_t *srv;
     uint8_t  in_use;
     uint8_t  cancelled;
-    uint8_t  has_progress;
+    uint8_t  has_progress;      /* progressToken 存在（数字或字符串） */
+    uint8_t  progress_is_str;   /* 1 = 字符串 token（原样回显） */
+    uint8_t  in_callback;       /* 工具回调执行中（禁止在回调内 complete） */
     uint8_t  id_is_str;
     int64_t  id_num;
     char     id_str[BT_MCP_CFG_IDSTR_MAX];
     uint16_t id_str_len;
-    uint64_t progress_token;
+    uint64_t progress_token;    /* 数字 token */
+    char     progress_str[BT_MCP_CFG_IDSTR_MAX];
+    uint16_t progress_str_len;
     uint32_t t0;
 };
 

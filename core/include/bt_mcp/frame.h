@@ -74,6 +74,8 @@ struct bt_mcp_framer {
     uint8_t  s_hdr[BT_MCP_HDR_LEN];
     uint8_t  s_hdr_got;
     uint16_t s_len_got;
+    uint8_t  s_fcs[2];                 /* FCS16：紧跟帧头的 2 字节校验（流通道状态） */
+    uint8_t  s_fcs_got;
     uint8_t  s_cur[BT_MCP_CFG_MAX_MSG]; /* 仅流通道用于非 CHUNKED 整帧缓存 */
     int      s_active;                 /* 流通道当前帧接收中 */
 };

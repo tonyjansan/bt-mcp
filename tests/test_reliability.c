@@ -207,6 +207,48 @@ int main(void)
         CHECK(in_use == 0, "link_down clears half-reassembled frames");
     }
 
+    /* ---- 9. 信用自愈：单个 CREDIT 丢失不导致永久少一格 ---- */
+    {
+        setup(244);
+        bt_mcp_session_t *sx = &se_tx;
+        uint8_t c16[3] = { BT_MCP_CTRL_CREDIT, 4, 0 };
+        uint8_t c36[3] = { BT_MCP_CTRL_CREDIT, 12, 0 };
+        uint32_t base = sx->credits;
+        bt_mcp_session_rx(sx, BT_MCP_KIND_CTRL, 0, c16, 3, NULL, NULL);
+        CHECK(sx->credits == base + 4, "cumulative CREDIT +4");
+        /* 丢掉 c26：下一个 c36 的 delta 应自动补回 8 */
+        bt_mcp_session_rx(sx, BT_MCP_KIND_CTRL, 0, c36, 3, NULL, NULL);
+        CHECK(sx->credits >= base + 12, "lost CREDIT self-heals via cumulative total");
+        /* 重复的同一累计值不应再加 */
+        uint32_t cur = sx->credits;
+        bt_mcp_session_rx(sx, BT_MCP_KIND_CTRL, 0, c36, 3, NULL, NULL);
+        CHECK(sx->credits == cur, "duplicate cumulative CREDIT adds nothing");
+    }
+
+    /* ---- 10. 重传放弃后信用退还（不死锁） ---- */
+    {
+        setup(244);
+        uint32_t base = se_tx.credits;
+        uint8_t m2[100]; memset(m2, 'z', sizeof m2);
+        CHECK(bt_mcp_session_tx(&se_tx, m2, sizeof m2) == 0, "tx for give-up");
+        CHECK(se_tx.credits == base - 1, "credit consumed on send");
+        for (int t = 0; t < 20; t++) bt_mcp_session_tick(&se_tx, (uint32_t)(t + 1) * 1000);
+        CHECK(se_tx.stat_tx_dropped >= 1, "message dropped after retries");
+        CHECK(se_tx.credits == base, "credit refunded after give-up");
+        CHECK(bt_mcp_session_tx(&se_tx, m2, sizeof m2) == 0, "session still usable");
+    }
+
+    /* ---- 11. 发送失败不扣信用 ---- */
+    {
+        setup(244);
+        /* 把 emit 换成必然失败的 sink */
+        q.n = MAXF;                         /* 队列打满 → q_emit 返回 E_NOMEM */
+        uint32_t base = se_tx.credits;
+        int rc = bt_mcp_session_tx(&se_tx, (const uint8_t *)"x", 1);
+        CHECK(rc != 0, "send fails when emit backpressures");
+        CHECK(se_tx.credits == base, "no credit lost on send failure");
+    }
+
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

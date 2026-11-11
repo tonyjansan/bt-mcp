@@ -14,7 +14,7 @@ const HDR: usize = 6;
 const FLAG_LAST: u8 = 0x01;
 const FLAG_CHUNK: u8 = 0x02;
 const FLAG_CTRL: u8 = 0x04;
-const MAX_FRAG: usize = 34;   /* 与 C 的 BT_MCP_CFG_MAX_FRAG 一致（8KB/255B=33→34） */
+const MAX_FRAG: usize = 255;  /* == BT_MCP_CFG_MAX_FRAG（u8 idx 上限） */
 const MAX_MSG: usize = 8192;
 
 const E_AGAIN: i32 = -1;
@@ -43,7 +43,7 @@ const RESUME_TOUT: u32 = 5000;
 const REQ_TOUT: u32 = 30000;
 const TX_SLOTS: usize = 2;
 const TX_RETRY_BYTES: usize = 512;
-const RX_FP_SLOTS: usize = 2;
+const RX_FP_SLOTS: usize = 4;
 const DEDUPE_MS: u32 = 5000;
 const ACK_TOUT: u32 = 600;
 const MAX_RETRY: u8 = 3;
@@ -181,7 +181,7 @@ struct SSlot {
 struct TxSlot { valid: bool, seq: u8, n: u8, len: u16, t0: u32, buf: Vec<u8> }
 
 #[derive(Clone, Copy)]
-struct RxFp { valid: bool, seq: u8, len: u16, crc: u32, t: u32 }
+struct RxFp { valid: bool, seq: u8, len: u16, crc: u32, t: u32, msg_no: u32 }
 
 struct Sess {
     packet: bool, mtu: u16,
@@ -199,7 +199,8 @@ struct Sess {
     req_inflight: bool, req_t0: u32,
     ping_pending: bool, ping_epoch: u8, ping_t0: u32, rtt_ms: u32, rtt_valid: bool,
     txslot: Vec<TxSlot>, txslot_next: usize,
-    rx_fp: Vec<RxFp>, rx_fp_next: usize,
+    rx_fp: Vec<RxFp>, rx_fp_next: usize, rx_msg_no: u32,
+    consumed: u16, peer_consumed: u16,
     retry_max: u8, ack_tout: u32,
     stat_tx_retransmit: u32, stat_tx_dropped: u32, stat_rx_dup: u32,
     now_ms: u32,
@@ -231,8 +232,9 @@ impl Sess {
             txslot: (0..TX_SLOTS).map(|_| TxSlot { valid: false, seq: 0, n: 0,
                 len: 0, t0: 0, buf: Vec::new() }).collect(),
             txslot_next: 0,
-            rx_fp: vec![RxFp { valid: false, seq: 0, len: 0, crc: 0, t: 0 }; RX_FP_SLOTS],
-            rx_fp_next: 0,
+            rx_fp: vec![RxFp { valid: false, seq: 0, len: 0, crc: 0, t: 0, msg_no: 0 };
+                        RX_FP_SLOTS],
+            rx_fp_next: 0, rx_msg_no: 0, consumed: 0, peer_consumed: 0,
             retry_max: MAX_RETRY, ack_tout: ACK_TOUT,
             stat_tx_retransmit: 0, stat_tx_dropped: 0, stat_rx_dup: 0,
             now_ms: 0,
@@ -402,9 +404,20 @@ impl Sess {
             let flags = self.s_hdr[1];
             let seq = self.s_hdr[2];
             let plen = u16::from_le_bytes([self.s_hdr[4], self.s_hdr[5]]) as usize;
-            if flags & FLAG_CTRL != 0 && plen > CTRL_MAX { return E_SYNC; }
-            if plen > MAX_MSG { return E_SYNC; }
-            if self.s_len_got as usize + plen > MAX_MSG { return E_SYNC; }
+            /* 判例同 C：三处畸形在「读载荷之前」判定并复位解析器
+             * （CHUNKED 在流通道上本身违规，无需等数据到齐） */
+            if (flags & FLAG_CTRL != 0 && plen > CTRL_MAX) {
+                self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;
+                return E_SYNC;
+            }
+            if plen > MAX_MSG || self.s_len_got as usize + plen > MAX_MSG {
+                self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;
+                return E_SYNC;
+            }
+            if flags & FLAG_CHUNK != 0 {
+                self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;
+                return E_SYNC;
+            }
             let mut take = plen - self.s_len_got as usize;
             if take > data.len() { take = data.len(); }
             self.s_cur[self.s_len_got as usize..self.s_len_got as usize + take]
@@ -412,7 +425,6 @@ impl Sess {
             self.s_len_got += take as u16;
             data = &data[take..];
             if (self.s_len_got as usize) < plen { return 0; }
-            if flags & FLAG_CHUNK != 0 { return E_SYNC; }
             let msg = self.s_cur[..plen].to_vec();
             msgs.push((if flags & FLAG_CTRL != 0 { K_CTRL } else { K_MCP }, seq, msg));
             self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;
@@ -425,6 +437,9 @@ impl Sess {
         for f in self.rx_fp.iter_mut() { f.valid = false; }
         self.txslot_next = 0;
         self.rx_fp_next = 0;
+        self.rx_msg_no = 0;
+        self.consumed = 0;
+        self.peer_consumed = 0;
         for s in self.slots.iter_mut() { s.in_use = false; s.gap_wait = 0; }
         self.s_hdr_got = 0; self.s_len_got = 0; self.s_active = false;
         self.nack_pending = false;
@@ -469,12 +484,14 @@ impl Sess {
             if !f.valid { continue; }
             if f.seq != seq || f.len != pl.len() as u16 || f.crc != crc { continue; }
             if self.now_ms.wrapping_sub(f.t) > DEDUPE_MS { continue; }
+            if self.rx_msg_no.wrapping_sub(f.msg_no) > 8 { continue; }
             return true;
         }
         let p = self.rx_fp_next % RX_FP_SLOTS;
         self.rx_fp_next += 1;
         self.rx_fp[p] = RxFp { valid: true, seq, len: pl.len() as u16, crc,
-                               t: self.now_ms };
+                               t: self.now_ms, msg_no: self.rx_msg_no };
+        self.rx_msg_no = self.rx_msg_no.wrapping_add(1);
         false
     }
 
@@ -526,10 +543,11 @@ impl Sess {
         if pl.is_empty() { return E_SYNC; }
         match pl[0] {
             C_CREDIT => {
-                if self.state != SState::Ready { return E_STATE; }
                 if pl.len() < 3 { return E_SYNC; }
-                let add = u16::from_le_bytes([pl[1], pl[2]]) as u32;
-                let cur = self.credits + add;
+                let total = u16::from_le_bytes([pl[1], pl[2]]);
+                let delta = total.wrapping_sub(self.peer_consumed);
+                self.peer_consumed = total;
+                let cur = self.credits + delta as u32;
                 self.credits = if cur > 255 { 255 } else { cur };
                 0
             }
@@ -544,13 +562,11 @@ impl Sess {
                 self.ctrl_frame(C_PING, &[epoch])
             }
             C_ACK => {
-                if self.state != SState::Ready { return E_STATE; }
                 if pl.len() < 2 { return E_SYNC; }
                 if let Some(p) = self.slot_by_seq(pl[1]) { self.txslot[p].valid = false; }
                 0
             }
             C_NACK => {
-                if self.state != SState::Ready { return E_STATE; }
                 if pl.len() < 3 { return E_SYNC; }
                 let Some(p) = self.slot_by_seq(pl[1]) else { return 0; };
                 let (seq, buf) = (self.txslot[p].seq, self.txslot[p].buf.clone());
@@ -616,12 +632,12 @@ impl Sess {
 
     /* 阶段二：上抛之后回补信用 / 回 ACK（与 C session_rx 顺序一致） */
     fn rx_post(&mut self, seq: u8) {
-        if self.state == SState::Ready {
-            if self.credit_on() {
-                let _ = self.ctrl_frame(C_CREDIT, &[1, 0]);
-            }
-            if self.unreliable() { self.send_ack(seq); }
+        if self.credit_on() {
+            self.consumed = self.consumed.wrapping_add(1);
+            let cum = self.consumed.to_le_bytes();
+            let _ = self.ctrl_frame(C_CREDIT, &cum);
         }
+        if self.unreliable() { self.send_ack(seq); }
     }
 
     fn rx(&mut self, kind: u8, seq: u8, payload: &[u8]) -> i32 {
@@ -639,13 +655,11 @@ impl Sess {
         if self.state != SState::Ready && self.state != SState::LinkUp {
             return E_STATE;
         }
-        if self.credit_on() {
-            if self.credits == 0 { return E_AGAIN; }
-            self.credits -= 1;
-        }
+        if self.credit_on() && self.credits == 0 { return E_AGAIN; }
         let seq = self.alloc_seq();
         let rc = self.frame_seq(K_MCP, seq, json);
         if rc != 0 { return rc; }
+        if self.credit_on() { self.credits -= 1; }
         if self.unreliable() && !json.is_empty() && json.len() <= TX_RETRY_BYTES {
             let p = self.slot_claim();
             self.txslot[p].buf.clear();
@@ -695,6 +709,7 @@ impl Sess {
             if self.txslot[i].n >= self.retry_max {
                 self.txslot[i].valid = false;
                 self.stat_tx_dropped += 1;
+                if self.credit_on() && self.credits < 255 { self.credits += 1; }
                 continue;
             }
             let (seq, buf) = (self.txslot[i].seq, self.txslot[i].buf.clone());
