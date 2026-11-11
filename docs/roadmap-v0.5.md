@@ -24,16 +24,18 @@
 | G8 丢包通道模型 | ✅ 完成 | `tests/test_lossy.c`，17 项不变量断言 |
 | G1 FCS16 进差分矩阵 | ✅ 完成 | oracle 支持 FCS16（env 开关），m1/m3/m4 三组配对差分全绿 |
 | G2 覆盖率门禁 | ✅ 完成 | `tools/coverage.sh`（llvm-cov），行 86.6% / 分支 55.6%，阈值 86/55 |
-| G4 符合性测试 | ✅ 完成（结构校验版） | `tests/test_conformance.c` 57 项规范结构断言；**尚未**与官方 SDK/Inspector 对跑 |
-| G5 重入用例 | ✅ 完成 | `tests/test_reentrancy.c` 8 项；TSan 构建仍未接 |
+| G4 符合性测试 | ✅ 完成 | `tests/test_conformance.c` 59 项结构断言 + `tests/golden_replay.py` 20 项 golden transcript（golden 逐条人工比对规范） |
+| G5 重入/TSan 用例 | ✅ 完成 | `tests/test_reentrancy.c` 8 项 + `tests/test_threads.c` 10 项（两线程两实例并发，TSan 干净） |
 
-**G4 的价值已兑现**：它当场抓出两个差分发现不了的真缺陷（`level` 缺引号、
-内嵌资源内容项多一个右花括号导致 tools/call 输出非法 JSON）。
-这说明「结构校验」和「差分」是互补的，两者都必须有。
+**G4 的价值已兑现三次**：结构校验抓出 `level` 缺引号与「内嵌资源多一个右花括号
+导致 tools/call 输出非法 JSON」；golden 核对抓出 `ping` 响应不是空对象。
+G5 的 TSan 用例则确认了「多实例无共享可变状态」，并暴露了 client 侧两个 8KB
+模块级缓冲（已修）。这说明**差分、结构校验、golden、并发检查四者是互补的**。
 
-仍未完成的只有两件（见 §1 V2/V4 的收敛版）：
-- 与**官方 MCP SDK/Inspector** 的真实 transcript 对跑（当前是自己校验自己）；
-- TSan/并发工具链接入（当前是单线程 + 手工重入用例）。
+v0.4 范围内已无未完成项。剩余工作全部属于 v0.5：
+- 与**官方 MCP SDK/Inspector** 的真实 transcript 对跑（当前 golden 是自己产出、
+  人工按规范核对——比自我循环强，但不如第三方实现互验）；
+- 分支覆盖率补齐（当前 57.6%，目标 75%）。
 
 ---
 
@@ -51,8 +53,8 @@ v0.4 期间，差分测试当场抓出了我重写时引入的 6 个缺陷（引
 | # | 任务 | 设计要点 | 验收 |
 |---|---|---|---|
 | ~~V1~~ | ~~FCS16 进差分~~ | **v0.4 已完成** | — |
-| V2 | **真实 Host 符合性**（G4 的完全版） | 用官方 MCP SDK（TS/Python）作 Host，录制真实 transcript 作 golden；C 侧回放比对 | golden 套件纳入 CI |
-| V3 | **分支覆盖率补齐** | 当前分支 55.6%，目标是 `mcp_server.c`/`session.c` 分支 ≥75%：补错误路径（TOOBIG/NOMEM/BUSY/E_LOCKED）、分页边界、游标越界、S2C 超时、取消竞态 | 分支覆盖 ≥75% 并把阈值提上去 |
+| V2 | **第三方互验**（G4 的完全版） | 用官方 MCP SDK（TS/Python）作 Host 跑真实会话，把 transcript 与自家 golden 对比；差异即互操作 bug | 与第三方实现对跑通过 |
+| V3 | **分支覆盖率补齐** | 当前分支 57.6%，目标 `mcp_server.c`/`session.c` 分支 ≥75%：补错误路径（TOOBIG/NOMEM/BUSY/E_LOCKED）、分页边界、游标越界、S2C 超时、取消竞态 | 分支覆盖 ≥75% 并把阈值提上去 |
 | ~~V4~~ | ~~重入不变量~~ | **v0.4 已完成基础用例**；剩余：把断言做成 debug 构建可选开关 + TSan 接入 | — |
 
 ### P1（同批建议）

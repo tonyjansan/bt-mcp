@@ -46,6 +46,10 @@
   响应是非法 JSON（Host 侧必解析失败）。差分发现不了（C 与 Rust 一起错），
   由符合性测试 + 独立 Python 解析器定位。
 - **`notifications/message` 的 level 值缺引号**（`"level":warning`）。
+- **`ping` 响应不是空对象**（回的是 `{"pong":true}`，规范要求 `{}`）。golden
+  核对时发现。
+- **`mcp_client.c` 的两个 8KB 模块级缓冲**（`g_cbuf`/`g_sbuf`）会让同时连接
+  两台设备的桥接互相覆盖 → 移入实例（与 `g_rbuf` 同类缺陷）。
 
 ### 破坏性变更
 
@@ -59,9 +63,11 @@
 - 差分：1339 项（C ↔ 独立 Rust oracle，15 个 MCP 场景含授权/富内容/prompts/订阅/日志），
   **另加 FCS16 配对差分**（m1 65 + m3 52 + m4 55）。
 - Port HIL：198 项。
-- 单元与定向：266 项（核心 63 + 可靠性 47 + 有损通道 17 + FCS16 51 + 符合性 57 +
-  重入 8 + 客户端 23）。
-- 覆盖率：行 86.6% / 分支 55.6%（llvm-cov，`tools/coverage.sh` 门禁 86/55）。
+- 单元与定向：295 项（核心 63 + 可靠性 47 + 有损通道 17 + FCS16 51 + 符合性 59 +
+  golden 20 + 重入 8 + 并发 10 + 客户端 23）。
+- 覆盖率：行 87.1% / 分支 57.6%（llvm-cov，`tools/coverage.sh` 门禁 86/55）。
+- TSan：多实例并发用例无数据竞争；`test_m2`/`client`/`reentrancy`/`reliability`
+  在 TSan 下同样干净。
 - 有损通道（50% 丢包 + 10% 重复 + 乱序）下「每条消息恰好投递一次」成立。
 - ASan/UBSan 全绿；fuzz 双模式零崩溃。
 
