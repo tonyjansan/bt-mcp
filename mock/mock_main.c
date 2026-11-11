@@ -14,6 +14,7 @@
  *                0x04 RX       u16 len + wire 帧字节（喂 framer→session_rx）
  *                0x05 CTRL     u8 type | u8 alen + args（session_ctrl）
  *                0x06 TICK     u32 now_ms
+ *                0x08 TX_REF   u16 len + MCP 原文（session_tx_ref，V8 大消息保护）
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -534,6 +535,14 @@ static int run_session(const uint8_t *in, size_t in_len)
             uint16_t l = (uint16_t)(in[off] | (in[off + 1] << 8)); off += 2;
             if ((size_t)off + l > in_len) return 2;
             rc = bt_mcp_session_tx(&se, in + off, l);
+            off += l;
+            break;
+        }
+        case 0x08: {                        /* TX_REF u16 len + MCP（V8 引用式） */
+            uint16_t l = (uint16_t)(in[off] | (in[off + 1] << 8)); off += 2;
+            if ((size_t)off + l > in_len) return 2;
+            /* mock 里缓冲就是输入脚本本身，生命周期覆盖本次调用即可 */
+            rc = bt_mcp_session_tx_ref(&se, in + off, l);
             off += l;
             break;
         }

@@ -260,7 +260,7 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
     case BT_MCP_CTRL_ACK: {
         if (len < 2) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
-        if (sl) sl->valid = 0;                   /* 已被对端消费 → 释放重传槽 */
+        if (sl) { sl->valid = 0; sl->ref = NULL; }  /* 释放重传槽 + 解除引用 */
         /* V9：任何合法 ACK 都证明链路可用 → RTO 回落基准（即使槽已放弃） */
         s->rto_cur_ms = s->rto_base_ms;
         return BT_MCP_OK;
@@ -269,8 +269,9 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
         if (len < 3) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (!sl || !s->fr || !s->emit) return BT_MCP_OK;   /* 无槽可补：交给对端超时 */
+        const uint8_t *src = sl->ref ? sl->ref : sl->buf;
         int rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq, pl[2],
-                                        sl->buf, sl->len, s->emit, s->io);
+                                        src, sl->len, s->emit, s->io);
         if (!rc) s->stat_tx_retransmit++;
         return rc;
     }
@@ -362,7 +363,9 @@ int bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
     return BT_MCP_OK;
 }
 
-int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
+/* tx / tx_ref 的公共实现：ref != NULL 表示引用式（不复制原文） */
+static int tx_common(bt_mcp_session_t *s, const uint8_t *json, uint32_t len,
+                     int ref_mode)
 {
     if (!s || (!json && len)) return BT_MCP_E_ARGS;
     if (s->state != BT_MCP_S_READY && s->state != BT_MCP_S_LINK_UP)
@@ -375,10 +378,17 @@ int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
     if (rc) return rc;               /* 没上线就不扣信用（v0.3 修信用泄漏） */
     if (chan_credit(s)) s->credits--;
 
-    /* 判例 5：不可靠包通道登记重传槽（放不下就放弃保护，仍照常发送） */
-    if (chan_unreliable(s) && len && len <= BT_MCP_CFG_TX_RETRY_BYTES) {
+    /* 判例 5：不可靠包通道登记重传槽（放不下就放弃保护，仍照常发送）。
+     * V8：ref_mode 时不复制原文，改为记录指针 —— 因此不受 TX_RETRY_BYTES 限制。 */
+    if (chan_unreliable(s) && len
+        && (ref_mode ? 1 : (len <= BT_MCP_CFG_TX_RETRY_BYTES))) {
         struct bt_mcp_tx_slot *sl = slot_claim(s);
-        memcpy(sl->buf, json, len);
+        if (ref_mode) {
+            sl->ref = json;
+        } else {
+            memcpy(sl->buf, json, len);
+            sl->ref = NULL;
+        }
         sl->len = (uint16_t)len;
         sl->seq = seq;
         sl->n = 0;
@@ -386,6 +396,16 @@ int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
         sl->valid = 1;
     }
     return BT_MCP_OK;
+}
+
+int bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
+{
+    return tx_common(s, json, len, 0);
+}
+
+int bt_mcp_session_tx_ref(bt_mcp_session_t *s, const uint8_t *json, uint32_t len)
+{
+    return tx_common(s, json, len, 1);
 }
 
 int bt_mcp_session_ctrl(bt_mcp_session_t *s, uint8_t type,
@@ -461,13 +481,15 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
             bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:drop_after_retries",
                          &sl->seq, 1);
             sl->valid = 0;
+            sl->ref = NULL;
             s->stat_tx_dropped++;
             /* 该消息确认永久丢失：退还发送时扣掉的信用，否则窗口单调泄漏 */
             if (chan_credit(s) && s->credits < 255) s->credits++;
             continue;
         }
+        const uint8_t *src = sl->ref ? sl->ref : sl->buf;
         int r = bt_mcp_framer_send_seq(s->fr, BT_MCP_KIND_MCP, sl->seq,
-                                       sl->buf, sl->len, s->emit, s->io);
+                                       src, sl->len, s->emit, s->io);
         sl->n++;
         sl->t0 = s->now_ms;
         if (r) { rc = r; continue; }

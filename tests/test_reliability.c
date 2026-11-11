@@ -328,6 +328,41 @@ int main(void)
         CHECK(se_tx.rto_cur_ms == base, "rto reset to base after ACK");
     }
 
+    /* ---- 15. 大消息保护（V8）：>512B 用 tx_ref 才有重传保护 ---- */
+    {
+        static uint8_t big[1200];
+        memset(big, 0x5A, sizeof big);
+        /* 15a：普通 tx 对 900B 不登记槽 → 超时后不重发 */
+        setup(244);
+        CHECK(bt_mcp_session_tx(&se_tx, big, 900) == 0, "tx 900B");
+        int slot_tx = -1;
+        for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++)
+            if (se_tx.txslot[i].valid) { slot_tx = i; break; }
+        CHECK(slot_tx < 0, "plain tx: no retx slot for >512B");
+        size_t b0 = q_bytes(&q);
+        bt_mcp_session_tick(&se_tx, 5000);
+        CHECK(q_bytes(&q) == b0, "plain tx: no retransmit after timeout");
+
+        /* 15b：tx_ref 登记槽（引用原文）→ 超时后整条重发，内容一致 */
+        setup(244);
+        CHECK(bt_mcp_session_tx_ref(&se_tx, big, 900) == 0, "tx_ref 900B");
+        int slot_ref = -1;
+        for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++)
+            if (se_tx.txslot[i].valid) { slot_ref = i; break; }
+        CHECK(slot_ref >= 0, "tx_ref: retx slot registered for >512B");
+        CHECK(se_tx.txslot[slot_ref].ref == big, "tx_ref: slot references caller buf");
+        size_t b1 = q_bytes(&q);
+        bt_mcp_session_tick(&se_tx, 5000);
+        CHECK(q_bytes(&q) > b1, "tx_ref: retransmit happened after timeout");
+        CHECK(se_tx.stat_tx_retransmit == 1, "tx_ref: retx counted");
+
+        /* 15c：ACK 后槽释放且引用被清空（避免悬空指针） */
+        uint8_t ack[2] = { BT_MCP_CTRL_ACK, se_tx.txslot[slot_ref].seq };
+        bt_mcp_session_rx(&se_tx, BT_MCP_KIND_CTRL, 0, ack, 2, NULL, NULL);
+        CHECK(se_tx.txslot[slot_ref].valid == 0, "tx_ref: slot released on ACK");
+        CHECK(se_tx.txslot[slot_ref].ref == NULL, "tx_ref: ref cleared on ACK");
+    }
+
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

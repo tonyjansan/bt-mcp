@@ -739,7 +739,14 @@ impl Sess {
         }
     }
 
-    fn tx(&mut self, json: &[u8]) -> i32 {
+    fn tx(&mut self, json: &[u8]) -> i32 { self.tx_common(json, false) }
+
+    /* V8：引用式发送。C 侧只记指针、重传时读调用方缓冲；oracle 侧没有
+     * 「调用方缓冲生命周期」的概念（指令流里缓冲立刻失效），因此等价语义是
+     * 「不受 512B 限制地保存一份副本」——线上行为与 C 完全一致。 */
+    fn tx_ref(&mut self, json: &[u8]) -> i32 { self.tx_common(json, true) }
+
+    fn tx_common(&mut self, json: &[u8], ref_mode: bool) -> i32 {
         if self.state != SState::Ready && self.state != SState::LinkUp {
             return E_STATE;
         }
@@ -748,7 +755,8 @@ impl Sess {
         let rc = self.frame_seq(K_MCP, seq, json);
         if rc != 0 { return rc; }
         if self.credit_on() { self.credits -= 1; }
-        if self.unreliable() && !json.is_empty() && json.len() <= TX_RETRY_BYTES {
+        if self.unreliable() && !json.is_empty()
+            && (ref_mode || json.len() <= TX_RETRY_BYTES) {
             let p = self.slot_claim();
             self.txslot[p].buf.clear();
             self.txslot[p].buf.extend_from_slice(json);
@@ -867,6 +875,14 @@ fn run_session(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
                 if off >= input.len() { return Err(2); }
                 let bond = input[off] != 0; off += 1;
                 s.link_down(bond);
+            }
+            0x08 => {
+                if off + 2 > input.len() { return Err(2); }
+                let l = u16::from_le_bytes(input[off..off + 2].try_into().unwrap()) as usize;
+                off += 2;
+                if off + l > input.len() { return Err(2); }
+                rc = s.tx_ref(&input[off..off + l]);
+                off += l;
             }
             0x03 => {
                 if off + 2 > input.len() { return Err(2); }

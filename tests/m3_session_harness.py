@@ -53,6 +53,11 @@ def op_tx(payload):
     return b"\x03" + struct.pack("<H", len(payload)) + payload
 
 
+def op_tx_ref(payload):
+    """V8：引用式发送（大消息也享重传保护）。"""
+    return b"\x08" + struct.pack("<H", len(payload)) + payload
+
+
 def op_rx(wire):
     return b"\x04" + struct.pack("<H", len(wire)) + wire
 
@@ -251,6 +256,25 @@ def idle_gate(rng):
     s += op_rx(frame_msg(0, 0x01, 0, mcp("nope")))
     s += op_link_up(0x5)
     return 0, 0, s
+
+
+@scenario
+def s_v05_tx_ref(rng):
+    """V8：>512B 消息用 tx_ref 发送 → 登记重传槽，超时后整条重发。"""
+    mtu = 244
+    body = (op_link_up(0) + op_tx_ref(b"x" * 900) +
+            op_tick(1000) + op_tick(2000) + op_tick(3000))
+    return 1, mtu, body
+
+
+@scenario
+def s_v05_tx_ref_vs_tx(rng):
+    """V8 对照：同样 900B，普通 tx 不登记重传（超时后不重发），
+    tx_ref 登记（超时后重发）——两者输出必须与各自语义一致。"""
+    mtu = 244
+    body = (op_link_up(0) + op_tx(b"y" * 900) +
+            op_tick(1000) + op_tick(2000))
+    return 1, mtu, body
 
 
 def rand_script(rng, packet):

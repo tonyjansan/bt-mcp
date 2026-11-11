@@ -53,6 +53,9 @@ struct bt_mcp_tx_slot {
     uint16_t len;
     uint32_t t0;               /* 最近一次发出时刻（ACK 超时基准） */
     uint8_t  buf[BT_MCP_CFG_TX_RETRY_BYTES];
+    /* v0.5 V8：引用式保护（tx_ref）。ref 非空时优先用 ref 重传，不再用 buf。
+     * 调用方必须保证 ref 在 ACK/放弃之前有效。 */
+    const uint8_t *ref;
 };
 
 /* 接收去重窗口项：只存指纹，不存消息体（大消息也不额外吃 RAM） */
@@ -158,6 +161,20 @@ int  bt_mcp_session_rx(bt_mcp_session_t *s, uint8_t kind, uint8_t seq,
                        bt_mcp_mcp_sink_t mcp_sink, void *user);
 /* 上行：L5 要发的完整 MCP 消息；受信用窗口约束，可能 E_AGAIN */
 int  bt_mcp_session_tx(bt_mcp_session_t *s, const uint8_t *json, uint32_t len);
+/* v0.5 V8：大消息重传保护（引用式）。
+ *
+ * 普通 tx 只对 <=BT_MCP_CFG_TX_RETRY_BYTES(512) 的消息在不可靠包通道上登记
+ * 重传副本（槽里存一份原文）。超过 512B 的消息此前**没有任何重传保护**——
+ * 丢一片就是整条丢。
+ *
+ * tx_ref 不复制原文，只在槽里记 (seq, len, json 指针)，重传时从你的缓冲重新
+ * 编码。因此它可以覆盖到 MAX_MSG，代价是**调用方必须保证 json 在
+ * ACK/放弃之前有效**（通常就是你自己持有的大缓冲）。
+ *
+ * 返回：0 成功；E_TOOBIG 超 MAX_MSG；与 tx 相同的其它错误。
+ * 注意：同一缓冲不能被两次 tx_ref 引用（重传时无法区分），调用方自行保证。 */
+int  bt_mcp_session_tx_ref(bt_mcp_session_t *s, const uint8_t *json,
+                           uint32_t len);
 /* 发送控制帧（RESUME/信用补给），绕过状态门的部分内部自理 */
 int  bt_mcp_session_ctrl(bt_mcp_session_t *s, uint8_t type,
                          const uint8_t *args, uint8_t args_len);
