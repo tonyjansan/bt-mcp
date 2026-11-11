@@ -16,6 +16,8 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOCK = os.environ.get("BT_MCP_MOCK") or os.path.join(ROOT, "build", "btmcp_mock")
+# FCS16 开关：必须与两侧构建配对（C 用 -DBT_MCP_CFG_FCS16=1，oracle 读同名环境变量）
+FCS = 2 if os.environ.get("BT_MCP_FCS16") == "1" else 0
 ORACLE = os.path.join(ROOT, "oracle", "target", "release", "oracle")
 
 MTUS = [0, 23, 27, 53, 128, 185, 244, 247, 261, 517]  # 0 = 流通道
@@ -102,10 +104,13 @@ def main():
             # 包通道：帧流 → [u16 片长+片]*。解析 C 发送产物：6B 头 + plen
             pk = b""
             off = 0
-            while off < len(frames):
+            while off + 6 <= len(frames):
                 plen = struct.unpack_from("<H", frames, off + 4)[0]
-                pk += struct.pack("<H", 6 + plen) + frames[off:off + 6 + plen]
-                off += 6 + plen
+                flen = 6 + FCS + plen
+                if off + flen > len(frames):
+                    break
+                pk += struct.pack("<H", flen) + frames[off:off + flen]
+                off += flen
             frames_in = pk
             (rc_c2, out_c2), (rc_o2, out_o2) = decode_both(
                 frames_in, "decode-p", "decode-p")
@@ -144,10 +149,13 @@ def main():
         else:
             pk = b""
             off = 0
-            while off < len(frames_c):
+            while off + 6 <= len(frames_c):
                 plen = struct.unpack_from("<H", frames_c, off + 4)[0]
-                pk += struct.pack("<H", 6 + plen) + frames_c[off:off + 6 + plen]
-                off += 6 + plen
+                flen = 6 + FCS + plen
+                if off + flen > len(frames_c):
+                    break
+                pk += struct.pack("<H", flen) + frames_c[off:off + flen]
+                off += flen
             rc_co, out_co = run(ORACLE, "decode-p", pk)
             rc_cc, out_cc = run(MOCK, "decode-p", pk)
             if rc_co or rc_cc:

@@ -11,6 +11,26 @@ use std::io::{Read, Write};
 
 const MAGIC: u8 = 0xB7;
 const HDR: usize = 6;
+
+/* FCS16（可选）：线序 hdr | fcs(2, LE) | payload。由环境变量 BT_MCP_FCS16=1 开启，
+ * 必须与 C 侧 -DBT_MCP_CFG_FCS16=1 的构建配对使用（差分只比同配置）。 */
+static FCS16_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn fcs16_on() -> bool {
+    *FCS16_ON.get_or_init(|| std::env::var("BT_MCP_FCS16").map(|v| v == "1")
+        .unwrap_or(false))
+}
+
+/* CRC16-CCITT，与 C 的 crc_cont 逐位一致 */
+fn crc16_cont(p: &[u8], mut crc: u16) -> u16 {
+    for &b in p {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+        }
+    }
+    crc
+}
 const FLAG_LAST: u8 = 0x01;
 const FLAG_CHUNK: u8 = 0x02;
 const FLAG_CTRL: u8 = 0x04;
@@ -69,12 +89,13 @@ fn crc32_of(data: &[u8]) -> u32 {
 
 fn encode(kind: u32, mtu: u16, payload: &[u8]) -> Option<Vec<u8>> {
     if payload.len() > MAX_MSG { return None; }
+    let fcs = if fcs16_on() { 2 } else { 0 };
     let chunk = if mtu == 0 {
         MAX_MSG
     } else {
         let m = mtu.min(261) as usize;
-        if m <= HDR { return None; }
-        m - HDR
+        if m <= HDR + fcs { return None; }
+        m - HDR - fcs
     };
     if kind == 1 && payload.len() > CTRL_MAX { return None; }
     let nfrag = if payload.is_empty() { 1 } else { payload.len().div_ceil(chunk) };
@@ -88,8 +109,14 @@ fn encode(kind: u32, mtu: u16, payload: &[u8]) -> Option<Vec<u8>> {
         if nfrag > 1 { flags |= FLAG_CHUNK; }
         if idx == nfrag - 1 { flags |= FLAG_LAST; }
         if kind == 1 { flags |= FLAG_CTRL; }
-        out.extend_from_slice(&[MAGIC, flags, 0, idx as u8]);
-        out.extend_from_slice(&(plen as u16).to_le_bytes());
+        let hdr = [MAGIC, flags, 0, idx as u8,
+                   (plen & 0xFF) as u8, (plen >> 8) as u8];
+        out.extend_from_slice(&hdr);
+        if fcs != 0 {
+            let c = crc16_cont(&hdr, 0xFFFF);
+            let c = crc16_cont(&payload[done..done + plen], c);
+            out.extend_from_slice(&[(c & 0xFF) as u8, (c >> 8) as u8]);
+        }
         out.extend_from_slice(&payload[done..done + plen]);
     }
     Some(out)
@@ -110,8 +137,14 @@ fn decode_packet(input: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
         if frag.len() < HDR { continue; }
         let (flags, seq, idx) = (frag[1], frag[2], frag[3]);
         let plen = u16::from_le_bytes([frag[4], frag[5]]) as usize;
-        if frag.len() < HDR + plen || idx as usize >= MAX_FRAG { continue; }
-        let pl = &frag[HDR..HDR + plen];
+        let fcs = if fcs16_on() { 2 } else { 0 };
+        if frag.len() < HDR + fcs + plen || idx as usize >= MAX_FRAG { continue; }
+        if fcs != 0 {
+            let want = crc16_cont(&frag[..HDR], 0xFFFF);
+            let want = crc16_cont(&frag[HDR + 2..HDR + 2 + plen], want);
+            if want != u16::from_le_bytes([frag[HDR], frag[HDR + 1]]) { continue; }
+        }
+        let pl = &frag[HDR + fcs..HDR + fcs + plen];
         let ctrl = flags & FLAG_CTRL != 0;
         if flags & FLAG_CHUNK == 0 {
             msgs.push((ctrl as u8, pl.to_vec()));
@@ -156,10 +189,17 @@ fn decode_stream(input: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
             u16::from_le_bytes([input[off + 4], input[off + 5]]) as usize);
         if (flags & FLAG_CTRL != 0 && plen > CTRL_MAX) || plen > MAX_MSG
             || flags & FLAG_CHUNK != 0 { return None; }
-        if off + HDR + plen > input.len() { break; }
+        let fcs = if fcs16_on() { 2 } else { 0 };
+        if off + HDR + fcs + plen > input.len() { break; }
+        if fcs != 0 {
+            let want = crc16_cont(&input[off..off + HDR], 0xFFFF);
+            let want = crc16_cont(&input[off + HDR + 2..off + HDR + 2 + plen], want);
+            if want != u16::from_le_bytes([input[off + HDR], input[off + HDR + 1]])
+                { return None; }
+        }
         msgs.push(((flags & FLAG_CTRL != 0) as u8,
-                   input[off + HDR..off + HDR + plen].to_vec()));
-        off += HDR + plen;
+                   input[off + HDR + fcs..off + HDR + fcs + plen].to_vec()));
+        off += HDR + fcs + plen;
     }
     Some(msgs)
 }
@@ -191,6 +231,7 @@ struct Sess {
     nack_pending: bool, nack_seq: u8, nack_idx: u8,
     slots: Vec<SSlot>,
     s_hdr: [u8; 6], s_hdr_got: usize, s_len_got: u16,
+    s_fcs: [u8; 2], s_fcs_got: usize,
     s_active: bool, s_cur: Vec<u8>,
     /* L4 */
     state: SState, credits: u32, tx_window: u32,
@@ -223,6 +264,7 @@ impl Sess {
                 len_total: 0, t_first: 0, t_last: 0, buf: vec![0; MAX_MSG],
             }).collect(),
             s_hdr: [0; 6], s_hdr_got: 0, s_len_got: 0,
+            s_fcs: [0; 2], s_fcs_got: 0,
             s_active: false, s_cur: vec![0; MAX_MSG],
             state: SState::Idle, credits: 0, tx_window: 4,
             resume_token: 0, resume_pending: false, resume_t0: 0,
@@ -245,8 +287,9 @@ impl Sess {
     fn chunk(&self) -> usize {
         if !self.packet { return MAX_MSG; }
         let m = self.mtu.min(261) as usize;
-        if m <= HDR { return 0; }
-        m - HDR
+        let fcs = if fcs16_on() { 2 } else { 0 };
+        if m <= HDR + fcs { return 0; }
+        m - HDR - fcs
     }
     fn credit_on(&self) -> bool { self.packet && !self.flow_ctrl }
     fn unreliable(&self) -> bool { self.packet && !self.reliable }
@@ -272,8 +315,18 @@ impl Sess {
             let mut flags = if kind == K_CTRL { FLAG_CTRL } else { 0 };
             if nfrag > 1 { flags |= FLAG_CHUNK; }
             if idx == nfrag - 1 { flags |= FLAG_LAST; }
-            self.wire.extend_from_slice(&[MAGIC, flags, seq, idx as u8,
-                plen as u8, (plen >> 8) as u8]);
+            let mut hdr = [MAGIC, flags, seq, idx as u8,
+                           plen as u8, (plen >> 8) as u8];
+            if fcs16_on() {
+                let c = crc16_cont(&hdr, 0xFFFF);
+                let c = crc16_cont(&payload[done..done + plen], c);
+                hdr = hdr;  /* 头本身不变 */
+                self.wire.extend_from_slice(&hdr);
+                self.wire.extend_from_slice(&[(c & 0xFF) as u8, (c >> 8) as u8]);
+                self.wire.extend_from_slice(&payload[done..done + plen]);
+                continue;
+            }
+            self.wire.extend_from_slice(&hdr);
             self.wire.extend_from_slice(&payload[done..done + plen]);
         }
         0
@@ -293,8 +346,13 @@ impl Sess {
         let mut flags = if kind == K_CTRL { FLAG_CTRL } else { 0 };
         if nfrag > 1 { flags |= FLAG_CHUNK; }
         if idx as usize == nfrag - 1 { flags |= FLAG_LAST; }
-        self.wire.extend_from_slice(&[MAGIC, flags, seq, idx,
-            plen as u8, (plen >> 8) as u8]);
+        let hdr = [MAGIC, flags, seq, idx, plen as u8, (plen >> 8) as u8];
+        self.wire.extend_from_slice(&hdr);
+        if fcs16_on() {
+            let c = crc16_cont(&hdr, 0xFFFF);
+            let c = crc16_cont(&payload[done..done + plen], c);
+            self.wire.extend_from_slice(&[(c & 0xFF) as u8, (c >> 8) as u8]);
+        }
         self.wire.extend_from_slice(&payload[done..done + plen]);
         0
     }
@@ -309,9 +367,16 @@ impl Sess {
         if frag.len() < HDR { return E_SYNC; }
         let (flags, seq, idx) = (frag[1], frag[2], frag[3]);
         let plen = u16::from_le_bytes([frag[4], frag[5]]) as usize;
-        if frag.len() < HDR + plen { return E_SYNC; }
+        let fcs = if fcs16_on() { 2 } else { 0 };
+        if frag.len() < HDR + fcs + plen { return E_SYNC; }
         if idx as usize >= MAX_FRAG { return E_SYNC; }
-        let pl = &frag[HDR..HDR + plen];
+        if fcs != 0 {
+            let want = crc16_cont(&frag[..HDR], 0xFFFF);
+            let want = crc16_cont(&frag[HDR + 2..HDR + 2 + plen], want);
+            let got = u16::from_le_bytes([frag[HDR], frag[HDR + 1]]);
+            if want != got { return E_SYNC; }
+        }
+        let pl = &frag[HDR + fcs..HDR + fcs + plen];
         let ctrl = flags & FLAG_CTRL != 0;
         if flags & FLAG_CHUNK == 0 {
             msgs.push((if ctrl { K_CTRL } else { K_MCP }, seq, pl.to_vec()));
@@ -399,6 +464,7 @@ impl Sess {
                     continue;
                 }
                 self.s_len_got = 0;
+                self.s_fcs_got = 0;
                 self.s_active = true;
             }
             let flags = self.s_hdr[1];
@@ -418,6 +484,14 @@ impl Sess {
                 self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;
                 return E_SYNC;
             }
+            if fcs16_on() {
+                while self.s_fcs_got < 2 && !data.is_empty() {
+                    self.s_fcs[self.s_fcs_got] = data[0];
+                    self.s_fcs_got += 1;
+                    data = &data[1..];
+                }
+                if self.s_fcs_got < 2 { return 0; }
+            }
             let mut take = plen - self.s_len_got as usize;
             if take > data.len() { take = data.len(); }
             self.s_cur[self.s_len_got as usize..self.s_len_got as usize + take]
@@ -425,6 +499,16 @@ impl Sess {
             self.s_len_got += take as u16;
             data = &data[take..];
             if (self.s_len_got as usize) < plen { return 0; }
+            if fcs16_on() {
+                let want = crc16_cont(&self.s_hdr[..HDR], 0xFFFF);
+                let want = crc16_cont(&self.s_cur[..plen], want);
+                let got = u16::from_le_bytes([self.s_fcs[0], self.s_fcs[1]]);
+                if want != got {
+                    self.s_active = false; self.s_hdr_got = 0;
+                    self.s_len_got = 0; self.s_fcs_got = 0;
+                    return E_SYNC;
+                }
+            }
             let msg = self.s_cur[..plen].to_vec();
             msgs.push((if flags & FLAG_CTRL != 0 { K_CTRL } else { K_MCP }, seq, msg));
             self.s_active = false; self.s_hdr_got = 0; self.s_len_got = 0;

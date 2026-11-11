@@ -40,6 +40,15 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    core/src/trace.c -o build/test_reliability
 ./build/test_reliability
 
+echo "== FCS16 差分（C ↔ Rust 同配置配对） =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
+   mock/mock_main.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c \
+   -o build/btmcp_mock_fcs
+BT_MCP_MOCK=build/btmcp_mock_fcs BT_MCP_FCS16=1 python3 tests/diff_harness.py 40
+BT_MCP_MOCK=build/btmcp_mock_fcs BT_MCP_FCS16=1 python3 tests/m3_session_harness.py 40
+BT_MCP_MOCK=build/btmcp_mock_fcs BT_MCP_FCS16=1 python3 tests/m4_mcp_harness.py 40
+
 echo "== 有损通道收敛（丢片/重复/乱序） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
    tests/test_lossy.c core/src/frame.c core/src/session.c core/src/trace.c \
@@ -55,6 +64,13 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    tests/test_m2.c core/src/frame.c core/src/session.c core/src/json.c \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
+
+echo "== 重入与多实例不变量 =="
+$CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+   tests/test_reentrancy.c core/src/frame.c core/src/session.c core/src/json.c \
+   core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c \
+   -o build/test_reentrancy
+./build/test_reentrancy
 
 echo "== Bridge 客户端端到端（client L5 ↔ server L5） =="
 $CC -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
