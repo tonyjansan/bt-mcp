@@ -8,6 +8,56 @@
 
 （无）
 
+## [0.4.0] - 2026-11-11
+
+代号：规范覆盖与可验证性。把 v0.3 的「能接 Host」推进到「符合规范、可被机器证明」。
+
+### 新增
+
+- **工具元数据**：`title`、`annotations`（readOnly/destructive/idempotent/openWorld）、
+  `outputSchema`；资源增加 `title`、`size`。
+- **富内容结果**：`bt_mcp_w_content_text/image/audio/resource`，一条 `tools/call`
+  可返回多个内容项（文本 + 图片 + 音频 + 内嵌资源混排）。
+- **prompts**：`prompts/list`、`prompts/get`（`bt_mcp_prompt_def_t` 注册表）。
+- **资源订阅**：`resources/subscribe` / `unsubscribe`、
+  `bt_mcp_server_notify_resource_updated()`。
+- **日志分级**：`logging/setLevel`、`bt_mcp_server_log()`、`notifications/message`。
+- **列表变化通知**：`bt_mcp_server_notify_list_changed()`；
+  `capabilities` 如实声明 `listChanged` / `subscribe` / `logging`。
+- **授权真正实施**：`AUTHZ_CONSENT` 走 `consent` 回调、`AUTHZ_RESTRICTED` 一律拒绝，
+  拒绝映射为 `-32003`（新增 `E_AUTHZ`）。
+- **server→client 请求**：`bt_mcp_server_request()` / `bt_mcp_server_inflight()`，
+  在途槽、按 id 匹配响应、超时（`BT_MCP_CFG_S2C_TOUT_MS`）。sampling / roots /
+  elicitation 由此可发。
+- **MTU 热更新**：`bt_mcp_framer_set_mtu()`——BLE MTU 交换后无需重建 framer。
+- **NVM 持久化**：`bt_mcp_storage_t` + `bt_mcp_session_set_storage/save_state/
+  load_state/resume_token`（快照带 magic/version 校验）。
+- **keepalive**：`BT_MCP_CFG_KEEPALIVE_MS` / `BT_MCP_CFG_IDLE_DEAD_MS`（默认关闭）。
+- **诊断**：`bt_mcp_strerror()`、`bt_mcp_trace()`（`BT_MCP_CFG_TRACE` 编译期可裁）、
+  `bt_mcp_json_get_f64()`（浮点参数，无 libm 依赖）、`bt_mcp_w_key()`。
+
+### 修复
+
+- **响应缓冲是文件级 static**：`g_rbuf`/`ebuf`/`nbuf` 多实例互相覆盖
+  （桥接端同时连两台设备即触发）→ 全部移入 `bt_mcp_server_t`。
+- 顺带修掉重写过程中引入的 6 处缺陷（引号偏移、双花括号、内容项二次包装等），
+  全部由差分测试当场抓出。
+
+### 破坏性变更
+
+- `bt_mcp_tool_def_t` 字段顺序变化（新增 title / output_schema_json / annotations）。
+- `bt_mcp_resource_def_t` 字段顺序变化（新增 title / size / sub）。
+- `bt_mcp_server_cfg_t` 新增 `prompts` / `prompts_count` / `consent` / `consent_user`。
+- 迁移：改用**指定初始化器**（`.name = ...`），即不受字段顺序影响。
+
+### 验证
+
+- 差分：1339 项（C ↔ 独立 Rust oracle，15 个 MCP 场景含授权/富内容/prompts/订阅/日志）。
+- Port HIL：198 项。
+- 单元与定向：201 项（核心 63 + 可靠性 47 + 有损通道 17 + FCS16 51 + 客户端 23）。
+- 有损通道（50% 丢包 + 10% 重复 + 乱序）下「每条消息恰好投递一次」成立。
+- ASan/UBSan 全绿；fuzz 双模式零崩溃。
+
 ## [0.3.0] - 2026-11-11
 
 代号：互通与可靠性。这一版的目标是让协议核心「能接真实 MCP Host，且在会丢包的
