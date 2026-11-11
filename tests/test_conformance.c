@@ -220,6 +220,30 @@ int main(void)
               "capabilities is object");
     }
 
+    /* 1c. 未初始化时发请求 → -32001（不是 -32002，那个留给资源不存在） */
+    {
+        static bt_mcp_framer_t fr2;
+        static bt_mcp_session_t se2;
+        static bt_mcp_server_t sv2;
+        static vec_t wire2;
+        memset(&wire2, 0, sizeof wire2);
+        bt_mcp_framer_init(&fr2, &fcfg, &cap);
+        bt_mcp_session_init(&se2, &sc);
+        bt_mcp_session_bind(&se2, &fr2, vput, &wire2);
+        bt_mcp_session_link_up(&se2, 0);
+        CHECK(bt_mcp_server_init(&sv2, &se2, &cfg, "d", "0.4") == 0, "sv2 init");
+        const char *q = "{\"jsonrpc\":\"2.0\",\"id\":77,"
+                        "\"method\":\"tools/list\"}";
+        CHECK(bt_mcp_server_rx(&sv2, (const uint8_t *)q,
+                              (uint32_t)strlen(q)) == 0, "pre-init request");
+        /* 响应在 wire2 里：找 -32001 */
+        int hit = 0;
+        const char *needle = "\"code\":-32001";
+        for (size_t i = 0; i + 13 <= wire2.n; i++)
+            if (!memcmp(wire2.b + i, needle, 13)) { hit = 1; break; }
+        CHECK(hit, "uninitialized -> -32001");
+    }
+
     /* 之后的方法需要 initialized */
     {
         const char *ini = "{\"jsonrpc\":\"2.0\","
@@ -313,7 +337,8 @@ int main(void)
               "restricted always denied");
     }
 
-    /* ---- 7. 错误码：未知方法 -32601、坏参数 -32602、未初始化 -32002 ---- */
+    /* ---- 7. 错误码：未知方法 -32601、坏参数 -32602、未初始化 -32001、
+     *         资源不存在 -32002、权限不足 -32003（V7 语义化） ---- */
     {
         CHECK(rpc("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"nope\"}", &r) == 0,
               "unknown method responds");

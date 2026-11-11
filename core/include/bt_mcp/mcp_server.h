@@ -13,6 +13,20 @@
 #ifndef BT_MCP_SERVER_H
 #define BT_MCP_SERVER_H
 
+/* MCP 错误码（v0.5 V7：语义化，避免「未初始化」与「资源不存在」共用 -32002）
+ * JSON-RPC 2.0 保留：-32700 解析错 / -32600 请求无效 / -32601 方法不存在 /
+ * -32602 参数无效 / -32603 内部错误。
+ * MCP 定义：-32002 资源不存在。本项目追加：-32001 未就绪、-32003 权限不足
+ * （均落在规范保留的 server error 区 -32000..-32099）。 */
+#define BT_MCP_EC_PARSE        (-32700)
+#define BT_MCP_EC_INVALID_REQ  (-32600)
+#define BT_MCP_EC_NO_METHOD    (-32601)
+#define BT_MCP_EC_BAD_PARAMS   (-32602)
+#define BT_MCP_EC_INTERNAL     (-32603)
+#define BT_MCP_EC_NOT_READY    (-32001)
+#define BT_MCP_EC_NO_RESOURCE  (-32002)
+#define BT_MCP_EC_DENIED       (-32003)
+
 #include <stdint.h>
 #include "session.h"
 #include "writer.h"

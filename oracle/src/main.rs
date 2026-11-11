@@ -1746,7 +1746,7 @@ fn server_rx(sv: &mut McpSrv, json: &[u8]) -> i32 {
     }
     if !sv.initialized {
         if !r.has_id { return E_STATE; }
-        return respond_err(sv, &r, -32002, "Server not initialized");
+        return respond_err(sv, &r, -32001, "Server not initialized");
     }
     if r.method == b"notifications/cancelled" { return 0; }
     if r.method == b"ping" { return respond(sv, &r, b""); }   /* 规范：空 result */

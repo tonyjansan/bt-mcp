@@ -373,7 +373,7 @@ static int respond_error(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r,
                          int code, const char *msg)
 {
     if (r->id_is_str && r->id_str_len >= BT_MCP_CFG_IDSTR_MAX)
-        return respond_error_null_id(sv, -32600, "Invalid request id");
+        return respond_error_null_id(sv, BT_MCP_EC_INVALID_REQ, "Invalid request id");
     memsink_t ms = { sv->ebuf, 0, (uint32_t)sizeof sv->ebuf };
     bt_mcp_writer_t w = { .put = mem_put, .sink = &ms, .need_comma = 0 };
     int rc = bt_mcp_w_begin_error_id(&w, r->id_num,
@@ -1207,7 +1207,7 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     int rc = bt_mcp_json_parse_msg((const char *)json, len, &r);
     if (rc) {
         /* 语法错：能定位 id 就回 -32700，否则静默（避免放大攻击面） */
-        return r.has_id ? respond_error(sv, &r, -32700, "Parse error")
+        return r.has_id ? respond_error(sv, &r, BT_MCP_EC_PARSE, "Parse error")
                         : BT_MCP_E_PARSE;
     }
 
@@ -1226,7 +1226,8 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
         return BT_MCP_OK;
     }
     if (!sv->initialized)
-        return r.has_id ? respond_error(sv, &r, -32002, "Server not initialized")
+        return r.has_id ? respond_error(sv, &r, BT_MCP_EC_NOT_READY,
+                                       "Server not initialized")
                         : BT_MCP_E_STATE;
 
     if (method_is(&r, "notifications/cancelled"))
@@ -1239,13 +1240,14 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
         rc = respond(sv, &r, body_tool_call, sv);
         if (rc == BT_MCP_E_PENDING) return BT_MCP_OK;
         if (rc == BT_MCP_E_PARSE)
-            return respond_error(sv, &r, -32602, "Invalid params");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
         if (rc == BT_MCP_E_AUTHZ)
-            return respond_error(sv, &r, -32003, "Permission denied");
+            return respond_error(sv, &r, BT_MCP_EC_DENIED, "Permission denied");
         if (rc == BT_MCP_E_NOMEM)
-            return respond_error(sv, &r, -32603, "Too many pending calls");
+            return respond_error(sv, &r, BT_MCP_EC_INTERNAL,
+                                 "Too many pending calls");
         if (rc == BT_MCP_E_TOOBIG)
-            return respond_error(sv, &r, -32603, "Result too large");
+            return respond_error(sv, &r, BT_MCP_EC_INTERNAL, "Result too large");
         return rc;
     }
     if (method_is(&r, "resources/list"))
@@ -1253,9 +1255,9 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     if (method_is(&r, "resources/read")) {
         rc = respond(sv, &r, body_resources_read, sv);
         if (rc == BT_MCP_E_ARGS)
-            return respond_error(sv, &r, -32002, "Resource not found");
+            return respond_error(sv, &r, BT_MCP_EC_NO_RESOURCE, "Resource not found");
         if (rc == BT_MCP_E_PARSE)
-            return respond_error(sv, &r, -32602, "Invalid params");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
         return rc;
     }
     if (method_is(&r, "resources/subscribe") ||
@@ -1263,8 +1265,8 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
         int sub = method_is(&r, "resources/subscribe");
         rc = handle_subscribe(sv, &r, sub);
         if (rc == BT_MCP_E_PARSE || rc == BT_MCP_E_ARGS)
-            return respond_error(sv, &r, -32602, "Invalid params");
-        if (rc) return respond_error(sv, &r, -32603, "Subscribe failed");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
+        if (rc) return respond_error(sv, &r, BT_MCP_EC_INTERNAL, "Subscribe failed");
         return respond(sv, &r, body_empty, sv);  /* 空 result {} */
     }
     if (method_is(&r, "prompts/list"))
@@ -1272,23 +1274,23 @@ int bt_mcp_server_rx(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     if (method_is(&r, "prompts/get")) {
         rc = respond(sv, &r, body_prompts_get, sv);
         if (rc == BT_MCP_E_PARSE)
-            return respond_error(sv, &r, -32602, "Invalid params");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
         if (rc == BT_MCP_E_ARGS)
-            return respond_error(sv, &r, -32602, "Prompt not found");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Prompt not found");
         return rc;
     }
     if (method_is(&r, "logging/setLevel")) {
         const char *lv; uint16_t lvl;
         if (bt_mcp_json_get_str(&r, "level", &lv, &lvl))
-            return respond_error(sv, &r, -32602, "Invalid params");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
         uint8_t l;
         if (log_level_parse(lv, lvl, &l)) 
-            return respond_error(sv, &r, -32602, "Invalid params");
+            return respond_error(sv, &r, BT_MCP_EC_BAD_PARAMS, "Invalid params");
         sv->log_level = l;
         return respond(sv, &r, body_empty, sv);  /* 空 result {} */
     }
     if (r.has_id)
-        return respond_error(sv, &r, -32601, "Method not found");
+        return respond_error(sv, &r, BT_MCP_EC_NO_METHOD, "Method not found");
     return BT_MCP_OK;
 }
 
