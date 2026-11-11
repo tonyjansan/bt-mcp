@@ -65,6 +65,18 @@ $CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_FCS16=1 -Icore/include \
    core/src/writer.c core/src/mcp_server.c core/src/err.c core/src/trace.c -o build/test_m2_fcs16
 ./build/test_m2_fcs16 > /dev/null && echo "  单元( FCS16 ) OK"
 
+echo "== 正交差分矩阵（配置签名 + 笛卡尔积） =="
+# 为矩阵准备各组合的 mock 构建
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
+   -Icore/include mock/mock_main.c core/src/frame.c core/src/session.c \
+   core/src/json.c core/src/writer.c core/src/mcp_server.c core/src/err.c \
+   core/src/trace.c -o build/btmcp_mock_shared
+$CC -O2 -std=c99 -Wall -Wextra -Werror -DBT_MCP_CFG_SHARED_REASM=1 \
+   -DBT_MCP_CFG_FCS16=1 -Icore/include mock/mock_main.c core/src/frame.c \
+   core/src/session.c core/src/json.c core/src/writer.c core/src/mcp_server.c \
+   core/src/err.c core/src/trace.c -o build/btmcp_mock_shared_fcs
+python3 tests/matrix_runner.py --rounds 30
+
 echo "== 文档与代码一致性 =="
 python3 tools/check_docs.py
 

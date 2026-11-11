@@ -2255,6 +2255,21 @@ fn main() {
     let mut out = std::io::stdout().lock();
 
     match mode.as_str() {
+        "config" => {
+            /* v0.6 N3：配置签名（与 C 侧同形，供差分矩阵前置比对） */
+            let fcs = if fcs16_on() { 1 } else { 0 };
+            println!(concat!(
+                "{{\"impl\":\"rust\",\"fcs16\":{},\"max_reasm\":{},",
+                "\"shared\":{},\"max_msg\":{},\"tx_slots\":{},",
+                "\"rx_fp\":{},\"max_frag\":{},\"page\":{},",
+                "\"pending\":{},\"subs\":{},\"s2c\":{},\"conn\":{},",
+                "\"rto_max\":{},\"batch_buf\":{},\"meta_max\":{}}}"),
+                fcs, max_reasm(),
+                if max_reasm() == 1 { 1 } else { 0 },
+                MAX_MSG, TX_SLOTS, RX_FP_SLOTS, MAX_FRAG, 8,
+                2, 8, 2, 4, RTO_MAX, 4096, 256);
+            return;
+        }
         "session" => {
             if let Err(rc) = run_session(&input, &mut out) {
                 std::process::exit(rc);

@@ -341,6 +341,24 @@ int main(int argc, char **argv)
     }
 
     if (!strcmp(argv[1], "pipe")) return run_pipe();
+    if (!strcmp(argv[1], "config")) {
+        /* v0.6 N3：输出配置签名，供差分矩阵前置比对。
+         * 两侧签名不一致时，差分结果没有意义（v0.5 共享模式那次红就是
+         * 因为 C=1 槽 / Rust=4 槽，排查花了时间）。 */
+        printf("{\"impl\":\"c\",\"fcs16\":%d,\"max_reasm\":%d,"
+               "\"shared\":%d,\"max_msg\":%d,\"tx_slots\":%d,"
+               "\"rx_fp\":%d,\"max_frag\":%d,\"page\":%d,"
+               "\"pending\":%d,\"subs\":%d,\"s2c\":%d,\"conn\":%d,"
+               "\"rto_max\":%d,\"batch_buf\":%d,\"meta_max\":%d}\n",
+               BT_MCP_CFG_FCS16, BT_MCP_CFG_MAX_REASM, BT_MCP_CFG_SHARED_REASM,
+               BT_MCP_CFG_MAX_MSG, BT_MCP_CFG_TX_SLOTS, BT_MCP_CFG_RX_FP_SLOTS,
+               BT_MCP_CFG_MAX_FRAG, BT_MCP_CFG_PAGE_SIZE,
+               BT_MCP_CFG_MAX_PENDING, BT_MCP_CFG_MAX_SUBS,
+               BT_MCP_CFG_MAX_S2C_REQ, BT_MCP_CFG_MAX_CONN,
+               BT_MCP_CFG_RTO_MAX_MS, BT_MCP_CFG_BATCH_BUF,
+               BT_MCP_CFG_META_MAX);
+        return 0;
+    }
 
     size_t in_len;
     uint8_t *in = read_all(&in_len);
