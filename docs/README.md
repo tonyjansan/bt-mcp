@@ -1,13 +1,15 @@
 # BT-MCP 文档索引
 
 > **从这里开始**：只想接入 → [`bt-mcp-interface-spec.html`](bt-mcp-interface-spec.html)；
-> 想改协议/看设计 → [`bt-mcp-core-draft.md`](bt-mcp-core-draft.md)。
+> 要自己实现一份 → [`bt-mcp-protocol-spec.md`](bt-mcp-protocol-spec.md)（规范）；
+> 要在本仓改代码 → [`bt-mcp-core-draft.md`](bt-mcp-core-draft.md)（实现说明）。
 
 ## 活文档（随代码持续更新）
 
 | 文档 | 内容 | 权威性 |
 |---|---|---|
-| [`bt-mcp-core-draft.md`](bt-mcp-core-draft.md) | **协议与接口权威文档**：设计原则、线格式、控制帧、会话语义、MCP 方法面、完整 C API 骨架、配置项、内存档位、实测开销 | 与公开头文件同步，改 API 必须同步本文件（`tools/check_docs.py` 会检查） |
+| [`bt-mcp-protocol-spec.md`](bt-mcp-protocol-spec.md) | **协议规范（normative）**：通道抽象、分帧格式、控制帧、会话语义、MCP 方法面、安全、兼容性矩阵 | 给**第三方实现者**；线上格式与语义以此为准 |
+| [`bt-mcp-core-draft.md`](bt-mcp-core-draft.md) | **实现说明（informative）**：设计原则、模块划分、完整 C API 骨架、port 清单、配置与内存档位、验证体系 | 给**本仓维护者**；与公开头文件同步（`tools/check_docs.py` 会检查） |
 | [`bt-mcp-interface-spec.html`](bt-mcp-interface-spec.html) | 集成者规约：port 如何接、字节流怎么喂、控制帧语义、最小 E2E 验收 | 面向移植/接入者 |
 | [`../README.md`](../README.md) | 项目概览、当前状态、构建与测试入口、能力覆盖表 | 门面 |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | 按版本记录对外变更（含破坏性变更与迁移方式） | 变更事实的单一来源 |
@@ -45,7 +47,8 @@
 
 ## 维护约定
 
-1. **改公开头文件 → 同步 `bt-mcp-core-draft.md` 的 §7**，否则 `tools/check_docs.py` 会失败。
+1. **改公开头文件 → 同步 `bt-mcp-core-draft.md` 的 §7（C API 骨架）**，否则 `tools/check_docs.py` 会失败。
+   **改线格式或语义 → 同步 `bt-mcp-protocol-spec.md`。**
 2. **改回归基线数字 → 同步 README / 草案 / 验证报告三处**（同一脚本检查）。
 3. **新增测试 → 在 `build.sh` 的对应分组里登记**，并按需加入 `tools/coverage.sh`。
 4. **截图/大文件不入库**；`build/`、`oracle/target/`、`node_modules/` 已在 `.gitignore`。

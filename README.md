@@ -172,5 +172,6 @@ cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN fuzz/fuzz_frame.c \
 | [`docs/v0.5-validation.md`](docs/v0.5-validation.md) | v0.5 验证报告（含四层验证战果、已知未达标项） |
 | [`docs/roadmap-v0.6.md`](docs/roadmap-v0.6.md) | v0.6 规划与设计（自动化对抗与规模验证） |
 | [`docs/README.md`](docs/README.md) | **文档索引**（活文档 vs 历史记录、维护约定） |
-| [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | 协议草案 **v0.6**（设计原理、线格式、完整 API 骨架、实测开销） |
+| [`docs/bt-mcp-protocol-spec.md`](docs/bt-mcp-protocol-spec.md) | **协议规范**（线格式、控制帧、会话语义、MCP 方法面）——给第三方实现者 |
+| [`docs/bt-mcp-core-draft.md`](docs/bt-mcp-core-draft.md) | **实现说明**（设计原理、完整 C API 骨架、配置与内存、验证体系）——给维护者 |
 | [`docs/bt-mcp-interface-spec.html`](docs/bt-mcp-interface-spec.html) | 集成者规约（Proxy/Host 接入） |

@@ -31,6 +31,7 @@ ALLOW = {
 }
 
 DOCS = ['README.md', 'docs/README.md', 'docs/bt-mcp-core-draft.md',
+        'docs/bt-mcp-protocol-spec.md',
         'docs/bt-mcp-interface-spec.html',
         'docs/v0.5-validation.md', 'docs/v0.4-validation.md',
         'docs/release-notes-v0.4.md', 'docs/release-notes-v0.3.md',
@@ -82,7 +83,8 @@ def check_versions():
     want = 'v0.6'
     checks = {
         'README.md': r'## Status \(2026-\d\d-\d\d, (v\d\.\d)\)',
-        'docs/bt-mcp-core-draft.md': r'# BT-MCP 核心协议草案 (v\d\.\d)',
+        'docs/bt-mcp-core-draft.md': r'# BT-MCP 实现说明',
+        'docs/bt-mcp-protocol-spec.md': r'规范（normative）',
         'docs/bt-mcp-interface-spec.html': r'<h1>BT-MCP (v\d\.\d) 外部接口规约</h1>',
     }
     for path, pat in checks.items():
@@ -92,8 +94,11 @@ def check_versions():
         m = re.search(pat, t)
         if not m:
             fails.append(f"{path}: 找不到版本标记（模式 {pat}）")
-        elif m.group(1) != want:
-            fails.append(f"{path}: 版本 {m.group(1)} != {want}")
+        elif m.groups():
+            # 带捕获组 = 该文件必须标注当前版本号
+            if m.group(1) != want:
+                fails.append(f"{path}: 版本 {m.group(1)} != {want}")
+        # 无捕获组 = 该文件是「不带版本号」的规范/说明，只要求标记存在
 
 
 def check_index():

@@ -189,6 +189,9 @@ $CC $CFLAGS fuzz/fuzz_l5.c $CORE -o build/fuzz_l5
 ./build/fuzz_l5 300000
 
 # ────────────────────────────── §8 门禁 ──────────────────────────────
+echo "== §8 静态分析门禁（自测 + 基线） =="
+python3 tools/static_analysis.py
+
 echo "== §8 文档与代码一致性 =="
 python3 tools/check_docs.py
 
