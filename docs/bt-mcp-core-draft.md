@@ -262,6 +262,20 @@ v0.6 的链路仿真 soak 实测（`tests/test_soak.c`）：
 由应用层按自己的业务键去重。**协议不会静默假装零重复**——
 `stat_rx_dup` 统计被拦下的重复，`stat_tx_dropped` 统计「放弃重试」的次数。
 
+**v0.7 的两处可靠性语义修正**（都由 soak 实测驱动）：
+
+| 项 | v0.6 | v0.7 | 原因 |
+|---|---|---|---|
+| `DEDUPE_MS` | 5000ms | **20000ms** | 去重时间窗必须覆盖发送侧**完整重传寿命**（指数退避 600×(2³−1)=4200ms + 末次在途）。否则迟到副本落在窗外 → 被当新消息二次上抛 |
+| NACK 补片 | 只补 `next_idx` 一片 | **从缺片尾部重放**（上限 16 片/次，预算 分片数×16） | 严格按序重组下，缺口之后的分片均白丢；只补一片要 N 轮，而 `retry_max=3` 早已耗尽 → 小 MTU 交付率仅 23%，改后 57% |
+
+**发送侧 stale 守卫**：重传前若该消息之后已发出 ≥ `RX_FP_SLOTS` 条新消息，
+说明对端指纹必然已被挤出，此时**放弃重传**（计入 `stat_tx_stale_drop`），
+而不是发一个对端认不出、会二次上抛的副本。
+
+**已知遗留**：尾部重放会重发已到达的分片，本质是浪费。根因修法是接收侧
+乱序缓存 + 缺片位图（只补真正缺的），见 `roadmap-v0.7.md` 的 A2 遗留项。
+
 **空闲信用刷新（v0.6）**——累计 CREDIT 帧不受 ARQ 保护，丢一个就少一格信用；
 若此时发送方信用耗尽且管道已空，对端没有「新的消费」可用来重发 CREDIT，
 于是**永久 `E_AGAIN`**（v0.6 soak 实测：30% 丢包下整个会话卡死）。
@@ -791,9 +805,11 @@ for (;;) {
 #define BT_MCP_CFG_RX_FP_SLOTS      8      /* 接收去重指纹槽（≥ TX_SLOTS；v0.6: 4→8） */
 #define BT_MCP_CFG_ACK_TOUT_MS      600    /* ACK 时限基准，也是 RTO 回落值 */
 #define BT_MCP_CFG_MAX_RETRY        3      /* 每消息重传上限 */
-#define BT_MCP_CFG_DEDUPE_MS        5000
+#define BT_MCP_CFG_DEDUPE_MS        20000  /* 必须覆盖重传寿命（v0.7: 5000→20000） */
 #define BT_MCP_CFG_RTO_MAX_MS       4800   /* 指数退避上限（v0.5） */
 #define BT_MCP_CFG_CREDIT_REFRESH_MS 600   /* 空闲信用刷新周期（v0.6） */
+#define BT_MCP_CFG_NACK_REPLAY_MAX   16    /* NACK 尾部重放一次最多几片（v0.7） */
+#define BT_MCP_CFG_NACK_REPLAY_BUDGET_X 16 /* 单消息重放预算 = 分片数 × 该值（v0.7） */
 
 /* ---- 安全（§6）---- */
 #define BT_MCP_CFG_RESUME_MAX_FAIL  3
