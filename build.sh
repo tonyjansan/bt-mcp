@@ -169,6 +169,9 @@ $CC $CFLAGS -DBT_MCP_CFG_SHARED_REASM=1 -DBT_MCP_CFG_FCS16=1 \
 BT_MCP_MOCK=build/btmcp_mock_shared BT_MCP_MAX_REASM=1 \
     python3 tests/m3_session_harness.py 40
 
+echo "== §6 独立第二实现校验（第三条腿，防「C 与 Rust 一起错」） =="
+python3 tests/cross_impl_l3.py 30
+
 echo "== §6 正交差分矩阵（配置签名 + 笛卡尔积） =="
 python3 tests/matrix_runner.py --rounds 30
 

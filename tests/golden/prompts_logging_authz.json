@@ -39,7 +39,7 @@
             "io.btmcp/ver": "0.5",
             "io.btmcp/chan": {
               "kind": 1,
-              "mtu": 244,
+              "mtu": 0,
               "window": 4,
               "reliable": 1,
               "flow": 1

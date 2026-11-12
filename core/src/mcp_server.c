@@ -677,8 +677,16 @@ static int body_initialize(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void 
     w->need_comma = 0;
     if (!rc) rc = kv_u32_new(w, "kind",
                              sv->sess && sv->sess->fr ? sv->sess->fr->cap->kind : 0);
-    if (!rc) rc = kv_u32_new(w, "mtu",
-                             sv->sess && sv->sess->fr ? sv->sess->fr->cap->mtu : 0);
+    /* v0.9（C2 独立实现发现）：流通道**没有 MTU 概念**，上报配置里的残值
+     * （例如误设成 60）会误导 Host。只在包通道上报 mtu，流通道报 0。
+     * 这个问题是「C 报 60 / Rust 报 0」的不一致，而两侧差分从未覆盖
+     * 「流通道 + 非零 MTU」这个组合——独立的第三实现才把它逼出来。 */
+    if (!rc) {
+        const bt_mcp_chan_cap_t *c = (sv->sess && sv->sess->fr)
+                                     ? sv->sess->fr->cap : NULL;
+        int is_packet = c && c->kind == BT_MCP_CHAN_PACKET;
+        rc = kv_u32_new(w, "mtu", (is_packet && c) ? c->mtu : 0);
+    }
     if (!rc) rc = kv_u32_new(w, "window", sv->sess ? sv->sess->cfg.tx_window : 0);
     if (!rc) rc = kv_u32_new(w, "reliable",
                              sv->sess && sv->sess->fr && sv->sess->fr->cap->reliable);
