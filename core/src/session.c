@@ -107,6 +107,8 @@ static void clear_reliability(bt_mcp_session_t *s)
     s->txslot_next = 0;
     s->rx_fp_next = 0;
     s->rx_msg_no = 0;
+    s->tx_msg_no = 0;
+    s->stat_tx_stale_drop = 0;
     s->consumed = 0;
     s->peer_consumed = 0;
     if (s->fr) bt_mcp_framer_reset(s->fr);
@@ -272,9 +274,27 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (!sl || !s->fr || !s->emit) return BT_MCP_OK;   /* 无槽可补：交给对端超时 */
         const uint8_t *src = sl->ref ? sl->ref : sl->buf;
-        int rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq, pl[2],
+        /* v0.7（A2）：**尾部重放**而不是只补一片。
+         * 接收侧严格按序重组，缺口之后已发出的分片都白丢了；只补 idx 这一片，
+         * 下一轮又会发现新的缺口 → 12 片的消息要 12 轮才能补齐，而
+         * retry_max 早就耗尽了（小 MTU 下交付率仅 ~23%）。
+         * 从 idx 补到末尾，一轮补齐所有现存缺口。
+         * 上限 BT_MCP_CFG_NACK_REPLAY_MAX：防止一次 NACK 触发过长突发（拥塞）。 */
+        uint8_t idx = pl[2];
+        uint8_t nfrag = bt_mcp_framer_frag_count(s->fr, sl->len);
+        /* 预算：累计重放片数不超过 分片数 × BUDGET_X，防止无效重放风暴 */
+        uint16_t budget = (uint16_t)nfrag * BT_MCP_CFG_NACK_REPLAY_BUDGET_X;
+        if (sl->nack_replay >= budget) return BT_MCP_OK;
+        uint8_t burst = 0;
+        int rc = 0;
+        for (uint8_t i = idx; i < nfrag && burst < BT_MCP_CFG_NACK_REPLAY_MAX; i++) {
+            rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq, i,
                                         src, sl->len, s->emit, s->io);
-        if (!rc) s->stat_tx_retransmit++;
+            if (rc) break;
+            burst++;
+            sl->nack_replay++;
+            s->stat_tx_retransmit++;
+        }
         return rc;
     }
     case BT_MCP_CTRL_RESUME_REQ: {               /* server 侧裁决 */
@@ -394,7 +414,9 @@ static int tx_common(bt_mcp_session_t *s, const uint8_t *json, uint32_t len,
         }
         sl->len = (uint16_t)len;
         sl->seq = seq;
+        sl->msg_no = s->tx_msg_no++;
         sl->n = 0;
+        sl->nack_replay = 0;
         sl->t0 = s->now_ms;
         sl->valid = 1;
     }
@@ -487,6 +509,20 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
             sl->ref = NULL;
             s->stat_tx_dropped++;
             /* 该消息确认永久丢失：退还发送时扣掉的信用，否则窗口单调泄漏 */
+            if (chan_credit(s) && s->credits < 255) s->credits++;
+            continue;
+        }
+        /* v0.7（A1 修复）：对端去重窗口只保留最近 RX_FP_SLOTS 条消息的指纹。
+         * 若这条消息之后又发了 ≥ RX_FP_SLOTS 条新消息，对端的指纹已被挤出，
+         * 此时再重传会被当成**新消息**二次上抛（工具重复执行）。
+         * 因此这里直接放弃：宁可让对端通过上层重试补齐，也不制造重复。
+         * 根因见 docs/roadmap-v0.7.md 的 A1（重传寿命 4.2s 远长于窗口 ~1s）。 */
+        if (s->tx_msg_no - sl->msg_no > BT_MCP_CFG_RX_FP_SLOTS) {
+            bt_mcp_trace(BT_MCP_TRACE_WARN, "tx:stale_drop", &sl->seq, 1);
+            sl->valid = 0;
+            sl->ref = NULL;
+            s->stat_tx_dropped++;
+            s->stat_tx_stale_drop++;
             if (chan_credit(s) && s->credits < 255) s->credits++;
             continue;
         }

@@ -87,6 +87,8 @@ int  bt_mcp_framer_init(bt_mcp_framer_t *f, const bt_mcp_frame_cfg_t *cfg,
                         const bt_mcp_chan_cap_t *cap);
 /* 取走一个发送序号（L4 需先知道 seq 才能登记重传槽） */
 uint8_t bt_mcp_framer_alloc_seq(bt_mcp_framer_t *f);
+/* 一条 len 字节的消息在当前 MTU 下会被切成几片（NACK 尾部重放需要知道） */
+uint8_t bt_mcp_framer_frag_count(const bt_mcp_framer_t *f, uint32_t len);
 /* 发送：整条消息 → emit 按片吐出（帧头+payload，FCS 可选）。
    kind: BT_MCP_KIND_MCP / BT_MCP_KIND_CTRL。返回 0 或负错误码。 */
 int  bt_mcp_framer_send(bt_mcp_framer_t *f, uint8_t kind,

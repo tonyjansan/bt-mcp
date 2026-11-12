@@ -52,6 +52,9 @@ struct bt_mcp_tx_slot {
     uint8_t  n;                /* 已重传次数 */
     uint16_t len;
     uint32_t t0;               /* 最近一次发出时刻（ACK 超时基准） */
+    uint32_t msg_no;           /* v0.7：该消息的发送代次（单调），用于判断
+                                * 「对端是否还认得出这是重传」 */
+    uint16_t nack_replay;      /* v0.7（A2）：已因 NACK 重放的片数（预算限制） */
     uint8_t  buf[BT_MCP_CFG_TX_RETRY_BYTES];
     /* v0.5 V8：引用式保护（tx_ref）。ref 非空时优先用 ref 重传，不再用 buf。
      * 调用方必须保证 ref 在 ACK/放弃之前有效。 */
@@ -128,6 +131,9 @@ struct bt_mcp_session {
     struct bt_mcp_rx_fp rx_fp[BT_MCP_CFG_RX_FP_SLOTS];
     uint8_t        rx_fp_next;
     uint32_t       rx_msg_no;         /* 单调消息计次（去重代次） */
+    /* ---- v0.7：发送侧单调计次（与接收侧去重窗口对齐） ---- */
+    uint32_t       tx_msg_no;
+    uint32_t       stat_tx_stale_drop; /* 因超出对端去重窗口而放弃重传的次数 */
     /* ---- v0.3：累计信用（CREDIT 丢失可自愈） ---- */
     uint16_t       consumed;          /* 本端已消费给对端的累计条数 */
     uint16_t       peer_consumed;     /* 对端已消费我方的累计条数（CREDIT 载荷） */

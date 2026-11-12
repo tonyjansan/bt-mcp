@@ -326,10 +326,17 @@ int main(void)
             n.txslot[0].valid = 1; n.txslot[0].seq = 42; n.txslot[0].len = 600;
             memcpy(n.txslot[0].buf, big, BT_MCP_CFG_TX_RETRY_BYTES);
             n.txslot[0].buf[0] = 'y';
+            /* v0.7（A2）：NACK 改为**尾部重放**——从缺片补到末尾，
+             * 而不是只补一片。600B / 238B 分片 = 3 片；从 idx=1 起补 2 片，
+             * 但注意从 idx=1 重放时后续片仍按原 idx 编号，字节长度 = 2×244。 */
             uint8_t nack[3] = { BT_MCP_CTRL_NACK, 42, 1 };
             wn.len = 0;
             bt_mcp_session_rx(&n, BT_MCP_KIND_CTRL, 0, nack, 3, NULL, NULL);
-            CHECK(wn.len == 244, "NACK replays exactly one chunk (6B hdr + 238B)");
+            /* 600B @ MTU244 → 分片载荷 238B，共 3 片（0,1,2）。
+             * 从 idx=1 起尾部重放 = 片 1 + 片 2 = 2 帧。片 2 是最小片
+             * （600-476=124B），所以总字节 = 244 + (6+124) = 374。 */
+            CHECK(wn.len > 244, "NACK replays tail, not a single chunk (v0.7 A2)");
+            CHECK(wn.len == 244 + 6 + 124, "tail replay = 2 whole fragments");
         }
 
         /* 接收去重：同 seq 同内容窗口内只上抛一次 */

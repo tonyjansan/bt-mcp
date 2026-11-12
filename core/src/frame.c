@@ -164,6 +164,25 @@ uint8_t bt_mcp_framer_alloc_seq(bt_mcp_framer_t *f)
     return f ? f->tx_seq++ : 0;
 }
 
+/* 有效 MTU：优先用热更新值，否则用通道能力（与 send 内的取法一致） */
+static uint16_t eff_mtu(const bt_mcp_framer_t *f)
+{
+    return f->mtu_override ? f->mtu_override : f->cap->mtu;
+}
+
+uint8_t bt_mcp_framer_frag_count(const bt_mcp_framer_t *f, uint32_t len)
+{
+    if (!f || !f->cap) return 1;
+    uint16_t mtu = eff_mtu(f);
+    if (f->cap->kind == BT_MCP_CHAN_STREAM) return 1;   /* 流通道单帧直发 */
+    uint32_t chunk = (uint32_t)(mtu > 261 ? 261 : mtu);
+    if (chunk <= BT_MCP_HDR_LEN + (BT_MCP_CFG_FCS16 ? 2u : 0u)) return 1;
+    chunk -= BT_MCP_HDR_LEN + (BT_MCP_CFG_FCS16 ? 2u : 0u);
+    uint32_t n = len ? (len + chunk - 1) / chunk : 1;
+    if (n > 255) n = 255;
+    return (uint8_t)n;
+}
+
 int bt_mcp_framer_send(bt_mcp_framer_t *f, uint8_t kind,
                        const uint8_t *payload, uint32_t len,
                        int (*emit)(void *, const uint8_t *, uint16_t),

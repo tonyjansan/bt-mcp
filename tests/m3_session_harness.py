@@ -83,6 +83,13 @@ def mcp(s):
     return s.encode()
 
 
+
+def op_set_mtu(mtu):
+    """v0.7（A7）：MTU 热更新。"""
+    return b"\x09" + struct.pack("<H", mtu)
+
+
+
 SCENARIOS = []
 
 
@@ -332,6 +339,8 @@ def rand_script(rng, packet):
     return (1 if packet else 0), mtu, s
 
 
+
+
 def main():
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 200
     rng = random.Random(0xB70710C0)  # 固定种子：可复现
@@ -375,5 +384,25 @@ def main():
           f"random={rounds})")
 
 
+
+@scenario
+def v07_set_mtu(rng):
+    """v0.7（A7）：MTU 热更新。
+
+    小 MTU → 切大 MTU → 切更小 → 回退 0（用通道能力）。
+    每次 set_mtu 后的 TX 都必须按**当时的** MTU 切片，两侧逐字节一致。
+    """
+    s = op_link_up(0)
+    s += op_set_mtu(60)
+    s += op_tx(mcp("small mtu message"))
+    s += op_set_mtu(244)
+    s += op_tx(mcp("big mtu message"))
+    s += op_set_mtu(23)
+    s += op_tx(mcp("tiny mtu message"))
+    s += op_set_mtu(0)              # 0 = 回退到通道能力
+    s += op_tx(mcp("after fallback"))
+    return 1, 244, s                # 包通道 + 初始 MTU 244
+
 if __name__ == "__main__":
     main()
+

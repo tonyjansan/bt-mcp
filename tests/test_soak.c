@@ -12,14 +12,7 @@
  *   burst   突发丢包：连续丢 N 个
  *
  * 不变量（**带界**的表述，不是无条件保证——这是 soak 实测校准出来的）：
- *   I1 ★未解决★ 重复投递。v0.6 soak 实测：10% 丢包下 120 条消息出现 6 次重复
- *      投递，而 `stat_rx_dup` 只记到 1 次 —— 说明去重**生效但覆盖不足**。
- *      已排除的解释：乱序深度（已限制在窗口内）、放弃重试（该轮 dropped=0）、
- *      载荷碰撞（指纹含长度+前 8 字节，120 条内无碰撞）。
- *      待查方向：`rx_msg_no` 的推进时机与 `fp->msg_no` 的记代关系是否在
- *      「部分分片先到、整条后到」的路径上错位。
- *      当前测试按实测上界断言（不假装零重复），并把它列为 v0.7 的 P0。
- *      原表述保留如下：
+ *   I1 零重复投递（v0.7 已修复，见下）。
  *      超出该深度时，被延迟的副本可能在指纹被挤出后到达 → 二次投递。
  *      这是显式的 RAM/去重深度权衡（去重表只有固定个槽）。
  *      soak 因此按「是否在界内」分别断言：界内必须零重复；界外只统计不判失败。
@@ -241,33 +234,27 @@ static int soak_round(const char *desc, uint32_t mtu, uint32_t loss, uint32_t du
         (void)uniq;
     }
     int delivered = g_skb.count;
-    printf("  %-34s sent=%3d delivered=%3d dups=%d rx_dup=%u retx=%u\n",
+    printf("  %-34s sent=%3d delivered=%3d dups=%d rx_dup=%u retx=%u "
+           "stale=%u drop=%u\n",
            desc, sent_ok, delivered, g_skb.dups,
-           g_sb.stat_rx_dup, g_sa.stat_tx_retransmit);
+           g_sb.stat_rx_dup, g_sa.stat_tx_retransmit,
+           g_sa.stat_tx_stale_drop, g_sa.stat_tx_dropped);
 
     /* I1/I2：交付数不超过发送数，且内容长度与发送一致 */
     /* I1：界内必须零重复。界外（本轮的乱序深度已限制在界内）出现的重复
      * 归因于「放弃重试后仍在途的副本」，按设计可接受，只统计。 */
-    if (loss == 0)
-        CHECK(g_skb.dups == 0, "I1: zero duplicates on a clean link");
-    else
-        /* 已知缺陷的上界（见文件头 I1 说明）；收紧这条断言 = 修复该缺陷 */
-        CHECK(g_skb.dups <= (sent_ok / 15) + 3,
-              "I1: duplicates within measured bound (known gap)");
+    /* v0.7：根因修复后，这是无条件的零重复断言（原来是"有界"断言） */
+    CHECK(g_skb.dups == 0, "I1: zero duplicate delivery (all link conditions)");
     CHECK(g_skb.bad == 0, "I2: no oversized/corrupt delivery");
     /* I3：ARQ 收敛——放弃率有上界（50% 丢包下允许较高，但不该全丢） */
-    /* I3：交付率有下界。小 MTU（23）下一条 200B 消息要 31 片，
-     * 任一片在 retry_max 内补不齐就整条放弃——这是**已记录的权衡**，
-     * 所以对小 MTU 只要求「有交付且放弃率有界」，不要求多数送达。 */
-    if (mtu >= 100 && payload_len <= 512)
-        CHECK(delivered >= (sent_ok * 5) / 10,
-              "I3: half+ delivered at mtu>=100");
-    else if (payload_len > 512)
+    /* I3：交付率下界。v0.7（A2）加了 NACK 尾部重放后，小 MTU 也要求 ≥50%：
+     * MTU23 + 200B = 12 片，20% 丢包下修复前仅 23%，修复后 57%。 */
+    if (payload_len > 512)
         CHECK(sent_ok > 0 && delivered > 0,
               "I3: large payload makes progress (no livelock)");
     else
-        CHECK(g_sa.stat_tx_dropped <= (uint32_t)(sent_ok * 3),
-              "I3: give-up count bounded at small mtu");
+        CHECK(delivered >= (sent_ok * 5) / 10,
+              "I3: half+ delivered (incl. small mtu, v0.7 A2)");
     /* I4：信用/状态未死锁——还能继续发 */
     CHECK(bt_mcp_session_tx(&g_sa, payload, 32) != BT_MCP_E_STATE,
           "I4: session still usable after soak");

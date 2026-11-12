@@ -38,6 +38,7 @@ const MAX_FRAG: usize = 255;  /* == BT_MCP_CFG_MAX_FRAG（u8 idx 上限） */
 const MAX_MSG: usize = 8192;
 
 const E_AGAIN: i32 = -1;
+const E_ARGS: i32 = -2;
 const E_PENDING: i32 = -9;   /* 与 C 的 BT_MCP_E_PENDING 对应（oracle 无异步工具） */
 const E_STATE: i32 = -3;
 const E_TOOBIG: i32 = -4;
@@ -57,6 +58,9 @@ const C_ACK: u8 = 6;
 const C_NACK: u8 = 7;
 
 const CTRL_MAX: usize = 255;
+/* v0.7（A2）：与 C 同——NACK 尾部重放上限与单消息重放预算 */
+const NACK_REPLAY_MAX: u8 = 16;
+const NACK_REPLAY_BUDGET_X: u16 = 16;
 /* 重组槽数：默认 4；C 侧用 -DBT_MCP_CFG_SHARED_REASM=1 时是 1，
  * 差分必须同配置，因此这里也允许用环境变量覆盖（与 FCS16 同模式）。 */
 static MAX_REASM_V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -72,7 +76,7 @@ const REQ_TOUT: u32 = 30000;
 const TX_SLOTS: usize = 2;
 const TX_RETRY_BYTES: usize = 512;
 const RX_FP_SLOTS: usize = 8;   /* v0.6：与 C 的 BT_MCP_CFG_RX_FP_SLOTS 对齐 */
-const DEDUPE_MS: u32 = 5000;
+const DEDUPE_MS: u32 = 20000;   /* v0.7：覆盖完整重传寿命（与 C 同） */
 const ACK_TOUT: u32 = 600;
 const RTO_MAX: u32 = 4800;         /* v0.5 V9：指数退避上限 */
 const CREDIT_REFRESH: u32 = 600;   /* v0.6：空闲信用刷新周期 */
@@ -228,13 +232,16 @@ struct SSlot {
 }
 
 #[derive(Clone)]
-struct TxSlot { valid: bool, seq: u8, n: u8, len: u16, t0: u32, buf: Vec<u8> }
+struct TxSlot { valid: bool, seq: u8, n: u8, len: u16, t0: u32,
+                msg_no: u32, nack_replay: u16, buf: Vec<u8> }
 
 #[derive(Clone, Copy)]
 struct RxFp { valid: bool, seq: u8, len: u16, crc: u32, t: u32, msg_no: u32 }
 
 struct Sess {
     packet: bool, mtu: u16,
+    /* v0.7：MTU 热更新后的当前值（0 表示回退到 mtu） */
+    mtu_cur: u16,
     reliable: bool, flow_ctrl: bool,
     /* L3 */
     tx_seq: u8, fnow: u32,
@@ -251,6 +258,7 @@ struct Sess {
     ping_pending: bool, ping_epoch: u8, ping_t0: u32, rtt_ms: u32, rtt_valid: bool,
     txslot: Vec<TxSlot>, txslot_next: usize,
     rx_fp: Vec<RxFp>, rx_fp_next: usize, rx_msg_no: u32,
+    tx_msg_no: u32, stat_tx_stale_drop: u32,
     consumed: u16, peer_consumed: u16,
     retry_max: u8, ack_tout: u32, rto_cur: u32, rto_base: u32,
     last_ctrl_ms: u32,
@@ -282,24 +290,26 @@ impl Sess {
             resume_fail: 0, resume_locked: false, resume_lock_t0: 0, resume_lock_ms: 0,
             req_inflight: false, req_t0: 0,
             ping_pending: false, ping_epoch: 0, ping_t0: 0, rtt_ms: 0, rtt_valid: false,
-            txslot: (0..TX_SLOTS).map(|_| TxSlot { valid: false, seq: 0, n: 0,
+            txslot: (0..TX_SLOTS).map(|_| TxSlot { valid: false, seq: 0, n: 0, msg_no: 0, nack_replay: 0,
                 len: 0, t0: 0, buf: Vec::new() }).collect(),
             txslot_next: 0,
             rx_fp: vec![RxFp { valid: false, seq: 0, len: 0, crc: 0, t: 0, msg_no: 0 };
                         RX_FP_SLOTS],
-            rx_fp_next: 0, rx_msg_no: 0, consumed: 0, peer_consumed: 0,
+            rx_fp_next: 0, rx_msg_no: 0, tx_msg_no: 0, stat_tx_stale_drop: 0,
+            consumed: 0, peer_consumed: 0,
             retry_max: MAX_RETRY, ack_tout: ACK_TOUT,
             rto_cur: ACK_TOUT, rto_base: ACK_TOUT,
             last_ctrl_ms: 0,
             stat_tx_retransmit: 0, stat_tx_dropped: 0, stat_rx_dup: 0,
             now_ms: 0,
-            wire: Vec::new(), msgs: Vec::new(),
+            wire: Vec::new(), msgs: Vec::new(), mtu_cur: 0,
         }
     }
 
+    fn eff_mtu(&self) -> u16 { if self.mtu_cur != 0 { self.mtu_cur } else { self.mtu } }
     fn chunk(&self) -> usize {
         if !self.packet { return MAX_MSG; }
-        let m = self.mtu.min(261) as usize;
+        let m = self.eff_mtu().min(261) as usize;
         let fcs = if fcs16_on() { 2 } else { 0 };
         if m <= HDR + fcs { return 0; }
         m - HDR - fcs
@@ -314,6 +324,20 @@ impl Sess {
     }
 
     /* 以指定 seq 发整条消息（判例 #1：seq 为消息键，重传不推进 tx_seq） */
+    /* 一条 len 字节消息在当前 MTU 下会被切成几片（与 C 的 frag_count 一致） */
+    fn frag_count(&self, len: usize) -> u8 {
+        if self.packet {
+            let mtu = self.eff_mtu();
+            let mut chunk = if mtu > 261 { 261u32 } else { mtu as u32 };
+            let ov = HDR as u32 + if fcs16_on() { 2 } else { 0 };
+            if chunk <= ov { return 1; }
+            chunk -= ov;
+            let n = if len == 0 { 1 } else { (len as u32 + chunk - 1) / chunk };
+            return n.min(255) as u8;
+        }
+        1
+    }
+
     fn frame_seq(&mut self, kind: u8, seq: u8, payload: &[u8]) -> i32 {
         let chunk = self.chunk();
         if chunk == 0 { return E_STATE; }
@@ -668,8 +692,21 @@ impl Sess {
                 if pl.len() < 3 { return E_SYNC; }
                 let Some(p) = self.slot_by_seq(pl[1]) else { return 0; };
                 let (seq, buf) = (self.txslot[p].seq, self.txslot[p].buf.clone());
-                let rc = self.frame_idx(K_MCP, seq, pl[2], &buf);
-                if rc == 0 { self.stat_tx_retransmit += 1; }
+                /* v0.7（A2，与 C 同）：尾部重放而不是只补一片 */
+                let nfrag = self.frag_count(buf.len());
+                let budget = nfrag as u16 * NACK_REPLAY_BUDGET_X;
+                if self.txslot[p].nack_replay >= budget { return 0; }
+                let mut rc = 0;
+                let mut burst = 0u8;
+                let mut i = pl[2];
+                while i < nfrag && burst < NACK_REPLAY_MAX {
+                    rc = self.frame_idx(K_MCP, seq, i, &buf);
+                    if rc != 0 { break; }
+                    burst += 1;
+                    self.txslot[p].nack_replay += 1;
+                    self.stat_tx_retransmit += 1;
+                    i += 1;
+                }
                 rc
             }
             C_RESUME_REQ => {
@@ -773,6 +810,9 @@ impl Sess {
             self.txslot[p].buf.extend_from_slice(json);
             self.txslot[p].len = json.len() as u16;
             self.txslot[p].seq = seq;
+            self.txslot[p].msg_no = self.tx_msg_no;
+            self.txslot[p].nack_replay = 0;
+            self.tx_msg_no = self.tx_msg_no.wrapping_add(1);
             self.txslot[p].n = 0;
             self.txslot[p].t0 = self.now_ms;
             self.txslot[p].valid = true;
@@ -816,6 +856,15 @@ impl Sess {
             if self.txslot[i].n >= self.retry_max {
                 self.txslot[i].valid = false;
                 self.stat_tx_dropped += 1;
+                if self.credit_on() && self.credits < 255 { self.credits += 1; }
+                continue;
+            }
+            /* v0.7 A1（与 C 同）：对端去重窗口容不下这条消息时，重传会被
+             * 当成新消息二次上抛。宁可放弃，也不制造重复。 */
+            if self.tx_msg_no.wrapping_sub(self.txslot[i].msg_no) > RX_FP_SLOTS as u32 {
+                self.txslot[i].valid = false;
+                self.stat_tx_dropped += 1;
+                self.stat_tx_stale_drop += 1;
                 if self.credit_on() && self.credits < 255 { self.credits += 1; }
                 continue;
             }
@@ -936,6 +985,12 @@ fn run_session(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
                 let now = u32::from_le_bytes(input[off..off + 4].try_into().unwrap());
                 off += 4;
                 s.tick(now);
+            }
+            0x09 => {   /* SET_MTU u16（v0.7 进差分） */
+                if off + 2 > input.len() { return Err(2); }
+                let m = u16::from_le_bytes(input[off..off + 2].try_into().unwrap());
+                off += 2;
+                rc = if s.packet { s.mtu_cur = m; 0 } else { E_ARGS };
             }
             _ => return Err(2),
         }

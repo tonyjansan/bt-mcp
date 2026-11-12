@@ -583,6 +583,11 @@ static int run_session(const uint8_t *in, size_t in_len)
             off += alen;
             break;
         }
+        case 0x09: {                        /* SET_MTU u16（v0.4 API，v0.7 进差分） */
+            uint16_t m = (uint16_t)(in[off] | (in[off + 1] << 8)); off += 2;
+            rc = bt_mcp_framer_set_mtu(&fr, m);
+            break;
+        }
         case 0x06: {                        /* TICK u32 now_ms */
             uint32_t now = rd_u32(in + off); off += 4;
             bt_mcp_session_tick(&se, now);

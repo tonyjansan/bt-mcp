@@ -62,8 +62,31 @@
 #ifndef BT_MCP_CFG_MAX_RETRY
 #define BT_MCP_CFG_MAX_RETRY     3      /* 重传次数上限（超过即放弃并计数） */
 #endif
+/* v0.7（A2）：收到 NACK 时一次最多重放多少片（尾部重放上限）。
+ * 必须 ≥ 一条消息的典型分片数，否则一轮补不齐、要多轮才能收敛。
+ * 实测（MTU 23 / 200B = 12 片 / 20% 丢包）：8 片 → 交付 23%，
+ * 16 片 → 57%（一次覆盖全部分片）。取 16。 */
+#ifndef BT_MCP_CFG_NACK_REPLAY_MAX
+#define BT_MCP_CFG_NACK_REPLAY_MAX  16
+#endif
+/* v0.7（A2）：单条消息因 NACK 累计重放的片数上限。
+ * 没有它时，尾部重放会反复触发（实测小 MTU 场景 retx 达 1.3 万次/60 条 ≈ 每条
+ * 重放 19 遍），带宽被无效重放吃掉。预算 = 分片数 × 该倍数。
+ * 实测倍数的拐点：3 → 交付 20%，8 → 22%，16 → **57%**，32 → 55%（饱和）。
+ * 取 16。注意这仍是「重放已到达的片」的浪费做法，根因修法见 roadmap A2 遗留：
+ * 接收侧乱序缓存 + 缺片位图，只补真正缺的片。 */
+#ifndef BT_MCP_CFG_NACK_REPLAY_BUDGET_X
+#define BT_MCP_CFG_NACK_REPLAY_BUDGET_X  16
+#endif
 #ifndef BT_MCP_CFG_DEDUPE_MS
-#define BT_MCP_CFG_DEDUPE_MS     5000   /* 重复消息判定时间窗（覆盖重传horizon） */
+/* 接收去重时间窗。**必须覆盖发送侧的完整重传寿命**，否则迟到副本落在窗外
+ * 会被当作新消息二次上抛（工具重复执行）。
+ * 推导：指数退避下重传寿命 ≈ ACK_TOUT × (2^MAX_RETRY − 1) = 600 × 7 = 4200ms，
+ * 再加最后一次重传的在途时间与调度抖动 → 取 4200 × 4 ≈ 20s 为安全值。
+ * v0.7 实测（docs/roadmap-v0.7.md A1）：5000ms 时 30%~50% 丢包仍有 2~5/120 条
+ * 重复；20000ms 后全部归零，代价是放弃重试的消息更少被误当"已送达"。
+ * RAM 代价：零（只多存一个时间戳比较）。 */
+#define BT_MCP_CFG_DEDUPE_MS       20000
 #endif
 
 /* ---- 安全：RESUME 防爆破 ---- */
