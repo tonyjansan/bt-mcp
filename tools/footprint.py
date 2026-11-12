@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""footprint.py —— 核心代码的 Flash/RAM 占用估算（v0.8 B3）。
+
+## 这个工具解决什么问题
+
+`tools/ram_baseline.py` 报的是 **sizeof(结构体)**，那是「静态 RAM 需求」。
+但真实固件占用还包括**代码体积（Flash）**，两者量级完全不同：
+FULL 档结构体 56KB，而代码约 27KB —— 只报前者会让人误判。
+本工具量后者。
+
+## 诚实的前提（重要）
+
+本机是 macOS，**没有 ARM 工具链**（arm-none-eabi-size 缺失）。
+所以这里用宿主 clang 编译并用 `size -m` 解析分段。含义：
+
+- **能信**：各档位之间的**相对关系**、以及分片开关（FCS16/TRACE/共享重组）
+  对代码体积的影响方向与幅度；
+- **不能信**：绝对值。ARM/Thumb 指令密度与 x86-64 差异可达 1.5~2 倍，
+  且真实固件还要加 libc、栈、port 胶水。
+
+M1 里程碑的 E4 要求「真实固件增量，与预测误差 ≤15%」—— 那必须用
+`arm-none-eabi-size` 量 demo 固件。本工具是 E4 之前能做到的最好近似，
+并且**明确标注它不是 E4**。
+
+## 用法
+
+    python3 tools/footprint.py            # 表格
+    python3 tools/footprint.py --json     # 机器可读
+"""
+import json
+import os
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+
+OUT = 'build/footprint'
+CC = os.environ.get('CC', 'cc')
+
+TIERS = ['COMPACT', 'STANDARD', 'FULL']
+SRCS = ['frame', 'session', 'mcp_server', 'mcp_client', 'json', 'writer', 'err']
+# 这些开关会改变代码体积（不是 RAM）
+VARIANTS = {
+    'default': '',
+    'fcs16': '-DBT_MCP_CFG_FCS16=1',
+    'trace': '-DBT_MCP_CFG_TRACE=1',
+    'shared_reasm': '-DBT_MCP_CFG_SHARED_REASM=1',
+}
+
+
+def parse_size_m(obj):
+    """解析 `size -m` 输出，返回 {section: bytes}。"""
+    r = subprocess.run(['size', '-m', obj], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    secs = {}
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith('Section ('):
+            continue
+        # 形如: Section (__TEXT, __text): 25104
+        # 注意括号里有 **两段**（segname, sectname），要取后一段。
+        try:
+            inside = line.split('(')[1].split(')')[0]
+            name = inside.split(',')[-1].strip()
+            size = int(line.rsplit(':', 1)[1].strip())
+        except (IndexError, ValueError):
+            continue
+        secs[name] = secs.get(name, 0) + size
+    return secs
+
+
+def build_and_measure(tier, variant_flags):
+    os.makedirs(OUT, exist_ok=True)
+    objs = []
+    for s in SRCS:
+        o = f'{OUT}/{tier}_{s}.o'
+        cmd = (f'{CC} -O2 -c -std=c99 -ffunction-sections -fdata-sections '
+               f'-Icore/include -DBT_MCP_TIER=BT_MCP_TIER_{tier} '
+               f'{variant_flags} core/src/{s}.c -o {o}').split()
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f'编译失败 {s}@{tier}: {r.stderr[:300]}')
+        objs.append(o)
+
+    total = {}
+    for o in objs:
+        secs = parse_size_m(o)
+        if secs is None:
+            raise SystemExit(f'size -m 失败: {o}')
+        for k, v in secs.items():
+            total[k] = total.get(k, 0) + v
+
+    # 归类：
+    #   Flash ≈ 代码 + 只读常量 + 字符串字面量
+    #   RAM   ≈ 零初始化(.bss) + 已初始化(.data) + 常量（MCU 上 const 可能在 RAM 或 flash）
+    flash = sum(v for k, v in total.items()
+                if k in ('__text', '__const', '__cstring', '__literal8',
+                         '__const_cfstring'))
+    bss = sum(v for k, v in total.items() if k == '__bss')
+    data = sum(v for k, v in total.items() if k == '__data')
+    return {'flash': flash, 'bss': bss, 'data': data, 'sections': total}
+
+
+def main():
+    as_json = '--json' in sys.argv
+    result = {}
+    for tier in TIERS:
+        for vname, vflags in VARIANTS.items():
+            key = f'{tier}/{vname}'
+            result[key] = build_and_measure(tier, vflags)
+
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    print('核心代码体积估算（宿主 clang，仅供相对比较；ARM 实测见 M1-E4）\n')
+    print(f'{"档位/配置":<26} {"Flash":>8} {"bss":>8} {"data":>7}')
+    print('-' * 54)
+    for key in sorted(result):
+        r = result[key]
+        print(f'{key:<26} {r["flash"]:>8} {r["bss"]:>8} {r["data"]:>7}')
+
+    print('\n相对关系（同一档位下各开关的影响）：')
+    for tier in TIERS:
+        base = result[f'{tier}/default']['flash']
+        parts = []
+        for vname in VARIANTS:
+            if vname == 'default':
+                continue
+            d = result[f'{tier}/{vname}']['flash'] - base
+            parts.append(f'{vname} {d:+d}')
+        print(f'  {tier:<9} base={base:>6}  ' + '  '.join(parts))
+
+    print('\n注意：')
+    print('  - Flash 含 __text/__const/__cstring/__literal8（MCU 上都在 Flash）。')
+    print('  - bss 是零初始化静态量；core 的 session/server 由**调用方**提供，')
+    print('    不计入这里（详见 tools/ram_baseline.py 的 sizeof 口径）。')
+    print('  - 绝对值不可用于选型：ARM/Thumb 与 x86-64 指令密度差异可达 1.5~2x。')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

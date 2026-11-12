@@ -2,8 +2,9 @@
  *
  * 目的：定位「这条消息为什么没上抛 / 为什么被丢」时不必改代码加 printf。
  * 设计约束：
- *  - **编译期可完全裁掉**：BT_MCP_CFG_TRACE=0 时 bt_mcp_trace() 展开为空，
- *    零代码零 RAM；
+ *  - **编译期可完全裁掉**：BT_MCP_CFG_TRACE=0 时为**宏**展开成空语句，
+ *    调用点不生成任何代码（v0.8 修正：原先是函数声明，调用点仍会生成
+ *    call 指令，与「零代码」的说法不符——现改为宏）；
  *  - 全局单例（调试设施，非协议状态）：默认不设置即无开销；
  *  - 回调内**禁止**调用任何 bt_mcp_* API（会重入），只允许记录/打印。
  */
@@ -26,8 +27,13 @@ typedef void (*bt_mcp_trace_fn)(void *user, uint8_t level,
 /* 设置/清除追踪钩子（fn=NULL 清除）。 */
 void bt_mcp_trace_set(void *user, bt_mcp_trace_fn fn);
 
-/* 发出一个事件（未设置钩子或编译期关闭时是空操作）。 */
+#if BT_MCP_CFG_TRACE
+/* 发出一个事件（未设置钩子时也是空操作）。 */
 void bt_mcp_trace(uint8_t level, const char *what,
                   const void *data, uint16_t len);
+#else
+/* 编译期关闭：宏展开为空，调用点零代码（这是本头文件承诺的核心性质）。 */
+#  define bt_mcp_trace(level, what, data, len)  ((void)0)
+#endif
 
 #endif

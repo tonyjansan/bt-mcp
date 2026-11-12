@@ -29,6 +29,9 @@ jobs:
              core/src/trace.c -o build/test_soak -lpthread
           ./build/test_soak
 
+      - name: Example ports API check
+        run: python3 tools/check_example_ports.py
+
       - name: RAM budget gate
         run: python3 tools/ram_baseline.py
 

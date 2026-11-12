@@ -129,6 +129,30 @@ A6 ✅（nightly 高强度回归）、A7 ✅（MTU 热更新进差分）。
 
 目标：**E1 + E2 + E3 + E4**。这一版是整个里程碑的重心。
 
+### 执行结果（2026-11-12）
+
+| # | 任务 | 状态 | 结果 |
+|---|---|---|---|
+| B1 | 真实 BLE 栈上板 | ❌ **环境不具备** | 本机 macOS，无 Linux/BlueZ、无 Zephyr SDK、无 ARM 工具链。按风险表降级为「写移植指南 + 参考实现」，**E1 仍未达成**，交接给有硬件的环境 |
+| B2 | port 层 + 参考实现 | ✅ **已做（未编译验证）** | 新增 `docs/porting-guide.md`（4 个接入点、通道语义表、初始化顺序、上板验收清单）+ `examples/zephyr/bt_mcp_port_nimble.c`。用 stub 头做了语法/API 校验，**抓到 3 个真错误**（`framer_feed` 少传参数、编造 `BT_MCP_TICK_MS`、句柄查找不成立），已固化为 `tools/check_example_ports.py` |
+| B3 | 固件 RAM/Flash | ⚠️ **部分** | 新增 `tools/footprint.py` 量代码体积。实测 COMPACT/STANDARD/FULL 的 Flash 相差不到 400B（档位改数组大小不改代码），**FCS16 增加约 1200B**（此前无人量化）。绝对值不可用于选型（见下） |
+| B4 | 板上可靠性 | ❌ **环境不具备** | 同 B1，E2 未达成 |
+| B5 | CMake/pkg-config | ✅ **已做并验证** | `add_subdirectory`（5 行）/ `find_package` / `pkg-config` 三条路都用**真实外部工程**验证通过；`.pc` 用 `${pcfiledir}` 相对定位，`--prefix` 重定位后仍正确 |
+
+### 顺带修掉的一个「文档撒谎」
+
+`trace.h` 声称「`BT_MCP_CFG_TRACE=0` 时 `bt_mcp_trace()` 展开为空，零代码零 RAM」，
+但它其实是**函数**——调用点仍生成 call 指令。8 个调用点共约 **456B**
+（session −406B + server 其余）。改成宏后承诺才成立，且关闭档真实省下 456B。
+这类「注释比实现乐观」的问题不会被测试发现，只能靠量体积。
+
+### E4 的诚实结论
+
+`tools/footprint.py` 用宿主 clang 量，**不是** `arm-none-eabi-size`。
+能信的是相对关系（哪个开关贵、贵多少）；不能信绝对值
+（ARM/Thumb 与 x86-64 指令密度差 1.5~2x）。**E4 仍未达成**，
+但「FCS16 ≈ +1200B」「档位只改数组不改代码」这类结论是可迁移的。
+
 | # | 任务 | 设计与验收 |
 |---|---|---|
 | **B1** | **选一个真实栈落地**（推荐 Zephyr/NimBLE） | 不做「三平台都支持」，只做**一个做到能上板**。验收：开发板 + 手机 nRF Connect / 自写 Host，跑通 initialize→tools/list→tools/call，附抓包与日志 |

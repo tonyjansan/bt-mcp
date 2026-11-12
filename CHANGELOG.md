@@ -8,6 +8,38 @@
 
 （无）
 
+## [0.8.0] - 2026-11-12
+
+### 新增
+
+- **标准构建系统**：`CMakeLists.txt` + `bt_mcpConfig.cmake` + `bt-mcp.pc`。
+  三条接入路径都用真实外部工程验证：`add_subdirectory`（5 行）、
+  `find_package(bt_mcp CONFIG)`、`pkg-config`。`.pc` 用 `${pcfiledir}`
+  相对定位，`cmake --install --prefix X` 之后仍然正确。
+- **移植指南** `docs/porting-guide.md`：4 个接入点、通道语义对照表
+  （GATT/SPP/CoC 的 reliable/flow_ctrl 该怎么填）、初始化顺序、
+  上板 6 步验收清单、以及「已知未验证项」清单。
+- **Zephyr/NimBLE 参考实现** `examples/zephyr/bt_mcp_port_nimble.c`。
+  **未在本机编译验证**（无 SDK），但用 stub 头做了 API 校验。
+- **`tools/check_example_ports.py`**：用 stub 头 + `-fsyntax-only` 校验参考实现
+  用的 core API 是否真实存在。写参考实现时它抓到 3 个真错误：
+  `framer_feed` 少传参数、编造了不存在的 `BT_MCP_TICK_MS` 宏、
+  句柄下标查找不成立。已接入 build.sh 与 CI。
+- **`tools/footprint.py`**：量核心代码的 Flash/常量体积（`sizeof` 之外的另一半）。
+  实测：三档位 Flash 相差 <400B（档位只改数组大小）；**FCS16 约 +1200B**。
+
+### 修复
+
+- **`bt_mcp_trace` 从函数改为宏**（TRACE=0 档）。`trace.h` 原本声称
+  「编译期关闭时零代码」，但它是个函数，8 个调用点仍在付 call 指令成本。
+  改为宏后关闭档真实省下约 **456B**（session 单文件 −406B），承诺才成立。
+
+### 已知未达成（需硬件环境）
+
+- **E1 真实 BLE 栈上板** / **E2 板上可靠性实测** / **E4 真实固件占用**：
+  本机为 macOS，无 Linux/BlueZ、无 Zephyr SDK、无 `arm-none-eabi-gcc`。
+  `footprint.py` 用宿主 clang 量的数字**只能看相对关系**，不能用于选型。
+
 ## [0.7.0] - 2026-11-12
 
 ### 修复

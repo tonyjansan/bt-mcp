@@ -1,0 +1,12 @@
+# pkg-config 文件：用 ${pcfiledir} 相对定位，保证 `cmake --install --prefix X`
+# 之后仍然正确（若硬编码 @CMAKE_INSTALL_PREFIX@，运行时改 prefix 会失效）。
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${exec_prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: bt-mcp
+Description: Bluetooth-carried MCP (JSON-RPC 2.0) over BLE GATT / SPP / L2CAP CoC
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lbt_mcp

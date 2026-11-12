@@ -25,6 +25,9 @@ ALLOW = {
     'bt_mcp_server_add_session', 'bt_mcp_session_handle_t',
     'bt_mcp_progress_t',            # v0.2 已移除，CHANGELOG 历史记录里提到
     'bt_mcp_session_ctrl',          # 存在，但可能被写作 session_ctrl 简写
+    'BT_MCP_TICK_MS',               # 故意提到：v0.8 记录「这个宏不存在，
+                                    #   tick 周期由宿主决定」，属反例引用
+    'bt_mcp_port_nimble',           # 参考实现的**文件名**，不是符号
 }
 
 DOCS = ['README.md', 'docs/README.md', 'docs/bt-mcp-core-draft.md',

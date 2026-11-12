@@ -189,6 +189,9 @@ $CC $CFLAGS fuzz/fuzz_l5.c $CORE -o build/fuzz_l5
 echo "== §8 文档与代码一致性 =="
 python3 tools/check_docs.py
 
+echo "== §8 参考移植实现的 core API 校验 =="
+python3 tools/check_example_ports.py
+
 echo "== §8 RAM 预算门禁（12 组合） =="
 python3 tools/ram_baseline.py
 
