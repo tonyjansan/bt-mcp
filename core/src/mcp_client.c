@@ -11,7 +11,7 @@
 #include "bt_mcp/mcp_client.h"
 #include "bt_mcp/err.h"
 #include <string.h>
-#include <stdio.h>
+#include "bt_mcp/writer.h"
 
 #define BT_MCP_CLIENT_TIMEOUT_CODE (-32000)
 
@@ -27,6 +27,21 @@ int bt_mcp_client_init(bt_mcp_client_t *c, bt_mcp_session_t *s,
     c->cb_user = user;
     c->next_id = 1;
     c->req_timeout_ms = 30000;
+    return BT_MCP_OK;
+}
+
+/* 写字面量（自动取长度，避免手写字节数出错） */
+#define W_LIT(w, lit) bt_mcp_w_raw((w), (lit), (uint32_t)(sizeof(lit) - 1))
+
+/* 把 writer 输出直接写进调用方给的缓冲；溢出返回 E_TOOBIG */
+typedef struct { char *buf; uint32_t cap; uint32_t len; } mbuf_t;
+
+static int mbuf_put(void *io, const char *d, uint32_t n)
+{
+    mbuf_t *m = io;
+    if (m->len + n > m->cap) return BT_MCP_E_TOOBIG;
+    memcpy(m->buf + m->len, d, n);
+    m->len += n;
     return BT_MCP_OK;
 }
 
@@ -65,25 +80,30 @@ static int send_request(bt_mcp_client_t *c, const char *method,
     if (c->next_id == 0) c->next_id = 1;
     if (!req_alloc(c, id)) return BT_MCP_E_NOMEM;
 
-    size_t n = 0;
-    char *sbuf = c->sbuf;
-    int w = snprintf(sbuf, sizeof c->sbuf,
-                     "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\"",
-                     (unsigned)id, method);
-    if (w < 0 || (size_t)w >= sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-    n = (size_t)w;
-    if (params_json) {
-        w = snprintf(sbuf + n, sizeof c->sbuf - n, ",\"params\":");
-        if (w < 0 || n + (size_t)w >= sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-        n += (size_t)w;
-        if (n + params_len + 1 > sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-        memmove(sbuf + n, params_json, params_len);   /* 源可能就是本实例的 cbuf，安全 */
-        n += params_len;
+    /* v0.7（A4）：改用 writer 构造。原实现用 snprintf("%s") 把 method 直接拼进
+     * JSON，**未做转义**——名字含引号/反斜杠就会生成非法 JSON；同时去掉对
+     * libc 格式化（snprintf）的依赖，使整个 core 编译期不再需要 printf 机制。 */
+    mbuf_t m = { c->sbuf, (uint32_t)sizeof c->sbuf, 0 };
+    bt_mcp_writer_t w = { .put = mbuf_put, .sink = &m, .need_comma = 0 };
+    int rc = W_LIT(&w, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (!rc) {
+        char idb[12]; int idn = 0;
+        uint32_t v = id;
+        do { idb[idn++] = (char)('0' + (int)(v % 10u)); v /= 10u; } while (v);
+        char rev[12];
+        for (int i = 0; i < idn; i++) rev[i] = idb[idn - 1 - i];
+        rc = bt_mcp_w_raw(&w, rev, (uint32_t)idn);
     }
-    if (n + 1 > sizeof c->sbuf) { req_find(c, id)->in_use = 0; return BT_MCP_E_TOOBIG; }
-    sbuf[n++] = '}';
+    if (!rc) rc = W_LIT(&w, ",\"method\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, method);
+    if (!rc && params_json) {
+        rc = W_LIT(&w, ",\"params\":");
+        if (!rc) rc = bt_mcp_w_raw(&w, params_json, params_len);
+    }
+    if (!rc) rc = W_LIT(&w, "}");
+    if (rc) { req_find(c, id)->in_use = 0; return rc; }
 
-    int rc = bt_mcp_session_tx(c->sess, (const uint8_t *)sbuf, (uint32_t)n);
+    rc = bt_mcp_session_tx(c->sess, (const uint8_t *)m.buf, m.len);
     if (rc) { req_find(c, id)->in_use = 0; return rc; }
     if (out_id) *out_id = id;
     return BT_MCP_OK;
@@ -100,15 +120,19 @@ int bt_mcp_client_initialize(bt_mcp_client_t *c, const char *client_name,
                              const char *client_version)
 {
     char params[256];
-    int n = snprintf(params, sizeof params,
-        "{\"protocolVersion\":\"%s\",\"capabilities\":{},"
-        "\"clientInfo\":{\"name\":\"%s\",\"version\":\"%s\"}}",
-        BT_MCP_PROTO_VERSION,
-        client_name ? client_name : "bt-mcp-bridge",
-        client_version ? client_version : "0.3");
-    if (n < 0 || (size_t)n >= sizeof params) return BT_MCP_E_TOOBIG;
+    mbuf_t m = { params, (uint32_t)sizeof params, 0 };
+    bt_mcp_writer_t w = { .put = mbuf_put, .sink = &m, .need_comma = 0 };
+    int rc = W_LIT(&w, "{\"protocolVersion\":\"");
+    if (!rc) rc = bt_mcp_w_raw(&w, BT_MCP_PROTO_VERSION,
+                               (uint32_t)strlen(BT_MCP_PROTO_VERSION));
+    if (!rc) rc = W_LIT(&w, "\",\"capabilities\":{},\"clientInfo\":{\"name\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, client_name ? client_name : "bt-mcp-bridge");
+    if (!rc) rc = W_LIT(&w, ",\"version\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, client_version ? client_version : "0.3");
+    if (!rc) rc = W_LIT(&w, "}}");
+    if (rc) return rc;
     uint32_t id = 0;
-    int rc = send_request(c, "initialize", params, (uint32_t)n, &id);
+    rc = send_request(c, "initialize", params, m.len, &id);
     if (rc == 0) { c->init_id = id; c->initialized = 0; }
     return rc;
 }
@@ -117,9 +141,13 @@ int bt_mcp_client_list_tools(bt_mcp_client_t *c, const char *cursor, uint32_t *o
 {
     char params[64];
     if (!cursor) return send_request(c, "tools/list", NULL, 0, out_id);
-    int n = snprintf(params, sizeof params, "{\"cursor\":\"%s\"}", cursor);
-    if (n < 0 || (size_t)n >= sizeof params) return BT_MCP_E_TOOBIG;
-    return send_request(c, "tools/list", params, (uint32_t)n, out_id);
+    mbuf_t m = { params, (uint32_t)sizeof params, 0 };
+    bt_mcp_writer_t w = { .put = mbuf_put, .sink = &m, .need_comma = 0 };
+    int rc = W_LIT(&w, "{\"cursor\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, cursor);
+    if (!rc) rc = W_LIT(&w, "}");
+    if (rc) return rc;
+    return send_request(c, "tools/list", params, m.len, out_id);
 }
 
 int bt_mcp_client_call_tool(bt_mcp_client_t *c, const char *name,
@@ -127,31 +155,34 @@ int bt_mcp_client_call_tool(bt_mcp_client_t *c, const char *name,
                             uint32_t *out_id)
 {
     if (!c || !name) return BT_MCP_E_ARGS;
-    size_t n = 0;
-    char *cbuf = c->cbuf;
-    int w = snprintf(cbuf, sizeof c->cbuf, "{\"name\":\"%s\",\"arguments\":", name);
-    if (w < 0 || (size_t)w >= sizeof c->cbuf) return BT_MCP_E_TOOBIG;
-    n = (size_t)w;
-    if (args_json && args_len) {
-        if (n + args_len + 1 > sizeof c->cbuf) return BT_MCP_E_TOOBIG;
-        memcpy(cbuf + n, args_json, args_len);
-        n += args_len;
-    } else {
-        if (n + 2 > sizeof c->cbuf) return BT_MCP_E_TOOBIG;
-        cbuf[n++] = '{';
-        cbuf[n++] = '}';
+    /* v0.7（A4）：同样改用 writer（name 需要转义） */
+    mbuf_t m = { c->cbuf, (uint32_t)sizeof c->cbuf, 0 };
+    bt_mcp_writer_t w = { .put = mbuf_put, .sink = &m, .need_comma = 0 };
+    int rc = W_LIT(&w, "{\"name\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, name);
+    if (!rc) rc = W_LIT(&w, ",\"arguments\":");
+    if (!rc) {
+        if (args_json && args_len) rc = bt_mcp_w_raw(&w, args_json, args_len);
+        else rc = W_LIT(&w, "{}");
     }
-    cbuf[n++] = '}';
-    return send_request(c, "tools/call", cbuf, (uint32_t)n, out_id);
+    if (!rc) rc = W_LIT(&w, "}");
+    if (rc) return rc;
+    /* 注意：cbuf 既是参数缓冲又是 send_request 的源，send_request 会在拼装时
+     * 读它；由于 send_request 用的是 sbuf，两者不重叠，安全。 */
+    return send_request(c, "tools/call", c->cbuf, m.len, out_id);
 }
 
 int bt_mcp_client_read_resource(bt_mcp_client_t *c, const char *uri, uint32_t *out_id)
 {
     char params[256];
     if (!c || !uri) return BT_MCP_E_ARGS;
-    int n = snprintf(params, sizeof params, "{\"uri\":\"%s\"}", uri);
-    if (n < 0 || (size_t)n >= sizeof params) return BT_MCP_E_TOOBIG;
-    return send_request(c, "resources/read", params, (uint32_t)n, out_id);
+    mbuf_t m = { params, (uint32_t)sizeof params, 0 };
+    bt_mcp_writer_t w = { .put = mbuf_put, .sink = &m, .need_comma = 0 };
+    int rc = W_LIT(&w, "{\"uri\":");
+    if (!rc) rc = bt_mcp_w_str_lit(&w, uri);
+    if (!rc) rc = W_LIT(&w, "}");
+    if (rc) return rc;
+    return send_request(c, "resources/read", params, m.len, out_id);
 }
 
 int bt_mcp_client_rx(bt_mcp_client_t *c, const uint8_t *json, uint32_t len)

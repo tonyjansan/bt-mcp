@@ -275,6 +275,42 @@ int main(void)
     CHECK(last_ev.error_code == -32000, "timeout code -32000");
     CHECK(bt_mcp_client_inflight(&cl) == 0, "no inflight after timeout");
 
+
+    /* v0.7（A4）：工具名/URI 里的引号与反斜杠必须被 JSON 转义。
+     * v0.6 及之前用 snprintf("%s") 直接拼接，遇到引号会生成**非法 JSON**。 */
+    {
+        static bt_mcp_chan_cap_t cap_s = { .kind = BT_MCP_CHAN_STREAM, .mtu = 0,
+            .reliable = 1, .flow_ctrl = 0, .max_pending = 4 };
+        static bt_mcp_frame_cfg_t cfg_s = { .max_reasm = 4, .frag_tout_ms = 2000 };
+        static bt_mcp_framer_t f2; static bt_mcp_session_t s2;
+        static bt_mcp_client_t c2; static vec_t w2;
+        w2.len = 0; w2.nfrag = 0;
+        bt_mcp_framer_init(&f2, &cfg_s, &cap_s);
+        bt_mcp_session_cfg_t sc2 = { .req_timeout_ms = 30000,
+                                     .resume_tout_ms = 5000, .tx_window = 8,
+                                     .role = BT_MCP_ROLE_CLIENT };
+        bt_mcp_session_init(&s2, &sc2);
+        bt_mcp_session_bind(&s2, &f2, c_put, &w2);
+        bt_mcp_session_link_up(&s2, 0);
+        bt_mcp_session_mark_ready(&s2);
+        bt_mcp_client_init(&c2, &s2, NULL, NULL);
+
+        CHECK(bt_mcp_client_call_tool(&c2, "evil\"name", "{}", 2, NULL) == 0,
+              "call_tool with quote in name ok");
+        int esc = 0;
+        for (size_t i = BT_MCP_HDR_LEN; i + 1 < w2.len; i++)
+            if (w2.buf[i] == '\\' && w2.buf[i + 1] == '"') esc = 1;
+        CHECK(esc, "quote in tool name is JSON-escaped");
+
+        w2.len = 0; w2.nfrag = 0;
+        CHECK(bt_mcp_client_read_resource(&c2, "bt-mcp://a\"b", NULL) == 0,
+              "read_resource with quote in uri ok");
+        esc = 0;
+        for (size_t i = BT_MCP_HDR_LEN; i + 1 < w2.len; i++)
+            if (w2.buf[i] == '\\' && w2.buf[i + 1] == '"') esc = 1;
+        CHECK(esc, "quote in uri is JSON-escaped");
+    }
+
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
