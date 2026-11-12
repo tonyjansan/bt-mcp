@@ -31,7 +31,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
+#include <stdlib.h>
 
 #include "bt_mcp/frame.h"
 #include "bt_mcp/session.h"
@@ -102,7 +102,7 @@ typedef struct {
     uint32_t fp[2048]; int nfp; int dups;
 } sink_t;
 
-static int g_trace;
+static int g_trace;   /* 由 SOAK_DBG=1 开启，默认静默 */
 static void on_msg(void *u, const uint8_t *pl, uint32_t len)
 {
     sink_t *s = u;
@@ -214,8 +214,6 @@ static int soak_round(const char *desc, uint32_t mtu, uint32_t loss, uint32_t du
         uint32_t len = payload_len;
         for (uint32_t k = 0; k < len; k++)
             payload[k] = (uint8_t)((i * 31u + k * 7u) & 0xFF);
-        if ((i % 20) == 0) fprintf(stderr, "  [dbg] %s: i=%d qa=%d qb=%d\n",
-                                   desc, i, g_qa.cnt, g_qb.cnt);
         int rc = bt_mcp_session_tx(&g_sa, payload, len);
         if (rc == BT_MCP_OK) {
             sent_ok++;
@@ -231,10 +229,7 @@ static int soak_round(const char *desc, uint32_t mtu, uint32_t loss, uint32_t du
         pump(6, &now);
     }
     /* 收尾：给足时间让 ARQ 收敛 */
-    clock_t t0 = clock();
     pump(3000, &now);
-    fprintf(stderr, "  [dbg] %s: drain 1200 took %.2fs\n",
-            desc, (double)(clock() - t0) / CLOCKS_PER_SEC);
 
     /* 精确判重：统计不重复载荷数，与发送数比较 */
     {
@@ -286,13 +281,12 @@ static int soak_round(const char *desc, uint32_t mtu, uint32_t loss, uint32_t du
 
 int main(void)
 {
+    if (getenv("SOAK_DBG")) g_trace = 1;
     printf("链路仿真 soak（不可靠包通道，ARQ 全开）：\n");
 
     /* 阶梯式加压：从干净链路到恶劣链路 */
     soak_round("clean mtu=244",            244, 0,  0,  0, 0, 120, 200);
-    g_trace = 1;
     soak_round("loss 10%",                 244, 10, 0,  0, 0, 120, 200);
-    g_trace = 0;
     soak_round("loss 30%",                 244, 30, 5,  5, 0, 120, 200);
     soak_round("loss 30% + burst 4",       244, 30, 5,  5, 4, 120, 200);
     soak_round("loss 50% (harsh)",         244, 50, 5, 10, 3, 100, 120);

@@ -427,7 +427,7 @@ int main(void)
               "log message method");
         if (mem_find(g_json, g_json_len, "\"level\":\"warning\"",
                      sizeof "\"level\":\"warning\"" - 1) == NULL) {
-            printf("[dbg] log json: %.*s\n", (int)g_json_len, (char *)g_json);
+            printf("  (实际 log 响应: %.*s)\n", (int)g_json_len, (char *)g_json);
         }
         CHECK(mem_find(g_json, g_json_len, "\"level\":\"warning\"",
                        sizeof "\"level\":\"warning\"" - 1) != NULL,
