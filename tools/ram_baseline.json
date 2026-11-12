@@ -4,10 +4,10 @@
     "framer": 3152,
     "max_msg": 1024,
     "max_reasm": 2,
-    "server": 6624,
+    "server": 6656,
     "session": 896,
     "shared": 0,
-    "total_core": 10672,
+    "total_core": 10704,
     "tx_slots": 2
   },
   "COMPACT/fcs16": {
@@ -15,10 +15,10 @@
     "framer": 3152,
     "max_msg": 1024,
     "max_reasm": 2,
-    "server": 6624,
+    "server": 6656,
     "session": 896,
     "shared": 0,
-    "total_core": 10672,
+    "total_core": 10704,
     "tx_slots": 2
   },
   "COMPACT/shared_reasm": {
@@ -26,10 +26,10 @@
     "framer": 2112,
     "max_msg": 1024,
     "max_reasm": 1,
-    "server": 6624,
+    "server": 6656,
     "session": 896,
     "shared": 1,
-    "total_core": 9632,
+    "total_core": 9664,
     "tx_slots": 2
   },
   "COMPACT/trace": {
@@ -37,10 +37,10 @@
     "framer": 3152,
     "max_msg": 1024,
     "max_reasm": 2,
-    "server": 6624,
+    "server": 6656,
     "session": 896,
     "shared": 0,
-    "total_core": 10672,
+    "total_core": 10704,
     "tx_slots": 2
   },
   "FULL/default": {
@@ -48,10 +48,10 @@
     "framer": 41072,
     "max_msg": 8192,
     "max_reasm": 4,
-    "server": 14048,
+    "server": 14080,
     "session": 1408,
     "shared": 0,
-    "total_core": 56528,
+    "total_core": 56560,
     "tx_slots": 2
   },
   "FULL/fcs16": {
@@ -59,10 +59,10 @@
     "framer": 41072,
     "max_msg": 8192,
     "max_reasm": 4,
-    "server": 14048,
+    "server": 14080,
     "session": 1408,
     "shared": 0,
-    "total_core": 56528,
+    "total_core": 56560,
     "tx_slots": 2
   },
   "FULL/shared_reasm": {
@@ -70,10 +70,10 @@
     "framer": 16448,
     "max_msg": 8192,
     "max_reasm": 1,
-    "server": 14048,
+    "server": 14080,
     "session": 1408,
     "shared": 1,
-    "total_core": 31904,
+    "total_core": 31936,
     "tx_slots": 2
   },
   "FULL/trace": {
@@ -81,10 +81,10 @@
     "framer": 41072,
     "max_msg": 8192,
     "max_reasm": 4,
-    "server": 14048,
+    "server": 14080,
     "session": 1408,
     "shared": 0,
-    "total_core": 56528,
+    "total_core": 56560,
     "tx_slots": 2
   },
   "STANDARD/default": {
@@ -92,10 +92,10 @@
     "framer": 10352,
     "max_msg": 2048,
     "max_reasm": 4,
-    "server": 7776,
+    "server": 7808,
     "session": 1408,
     "shared": 0,
-    "total_core": 19536,
+    "total_core": 19568,
     "tx_slots": 2
   },
   "STANDARD/fcs16": {
@@ -103,10 +103,10 @@
     "framer": 10352,
     "max_msg": 2048,
     "max_reasm": 4,
-    "server": 7776,
+    "server": 7808,
     "session": 1408,
     "shared": 0,
-    "total_core": 19536,
+    "total_core": 19568,
     "tx_slots": 2
   },
   "STANDARD/shared_reasm": {
@@ -114,10 +114,10 @@
     "framer": 4160,
     "max_msg": 2048,
     "max_reasm": 1,
-    "server": 7776,
+    "server": 7808,
     "session": 1408,
     "shared": 1,
-    "total_core": 13344,
+    "total_core": 13376,
     "tx_slots": 2
   },
   "STANDARD/trace": {
@@ -125,10 +125,10 @@
     "framer": 10352,
     "max_msg": 2048,
     "max_reasm": 4,
-    "server": 7776,
+    "server": 7808,
     "session": 1408,
     "shared": 0,
-    "total_core": 19536,
+    "total_core": 19568,
     "tx_slots": 2
   }
 }

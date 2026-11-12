@@ -132,6 +132,26 @@ static const bt_mcp_prompt_def_t PROMPTS[] = {
     { .name = "p", .desc = "prompt", .title = "P", .get = prompt_get },
 };
 
+/* v0.7（A5）：资源模板与补全 */
+static const bt_mcp_resource_template_t TPLS[] = {
+    { .uri_template = "bt-mcp://dev/{n}/log", .name = "tpl",
+      .desc = "tpl desc", .title = "T", .mime_type = "text/plain" },
+};
+static int conf_complete(void *u, const char *rt, uint16_t rtl,
+                         const char *rn, uint16_t rnl, const char *an,
+                         uint16_t anl, const char *av, uint16_t avl,
+                         const char *const **out, uint16_t *n)
+{
+    (void)u; (void)rt; (void)rtl; (void)rn; (void)rnl; (void)an; (void)anl;
+    static const char *const ALL[] = { "alpha", "beta" };
+    static const char *F[2];
+    int k = 0;
+    for (int i = 0; i < 2; i++)
+        if (!avl || !strncmp(ALL[i], av, avl)) F[k++] = ALL[i];
+    *out = F; *n = (uint16_t)k;
+    return 0;
+}
+
 static bt_mcp_framer_t  g_fr;
 static bt_mcp_session_t g_se;
 static bt_mcp_server_t  g_sv;
@@ -201,7 +221,9 @@ int main(void)
         .tools_count = (uint16_t)(sizeof TOOLS / sizeof TOOLS[0]),
         .resources = RES, .resources_count = 1,
         .prompts = PROMPTS, .prompts_count = 1,
-        .consent = consent_cb, .consent_user = NULL };
+        .consent = consent_cb, .consent_user = NULL,
+        .templates = TPLS, .templates_count = 1,
+        .complete = conf_complete };
     CHECK(bt_mcp_server_init(&g_sv, &g_se, &cfg, "conf-dev", "0.4") == 0,
           "server init");
 
@@ -220,6 +242,13 @@ int main(void)
             const char *rs; uint32_t rsl;
             CHECK(!bt_mcp_json_top_raw(&r, "result", &rs, &rsl)
                   && rsl > 2 && rs[0] == '{', "result is object");
+            /* v0.7（A5）：能力声明（就在这条 initialize 响应里断言） */
+            CHECK(mem_find(g_json, g_json_len, "\"templates\":{}",
+                           sizeof "\"templates\":{}" - 1) != NULL,
+                  "capabilities declares resources.templates");
+            CHECK(mem_find(g_json, g_json_len, "\"completions\":{}",
+                           sizeof "\"completions\":{}" - 1) != NULL,
+                  "capabilities declares completions");
         }
         CHECK(!has(&r, "protocolVersion", &v, &vl) && vl >= 2 && v[0] == '"',
               "protocolVersion is string");

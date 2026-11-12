@@ -22,11 +22,13 @@
             },
             "resources": {
               "subscribe": true,
-              "listChanged": true
+              "listChanged": true,
+              "templates": {}
             },
             "prompts": {
               "listChanged": true
             },
+            "completions": {},
             "logging": {}
           },
           "serverInfo": {

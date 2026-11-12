@@ -1336,6 +1336,25 @@ fn find_key(params: &[u8], key: &[u8]) -> Option<(usize, usize)> {
     }
 }
 
+/* v0.7（A5）：取 params.<obj>.<key> 的字符串值（不含引号，转义保留） */
+/* 取任意类型值的原文（对象/数组/字符串/数字都可）——get_str_value 只认字符串，
+ * 取对象必须用它，否则嵌套 params 会被误判为失败。 */
+fn get_raw_value(params: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let (v0, v1) = find_key(params, key)?;
+    if v1 <= v0 { return None; }
+    Some(params[v0..v1].to_vec())
+}
+
+fn sub_get_str(params: &[u8], obj: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let inner = get_raw_value(params, obj)?;
+    if inner.len() < 2 { return None; }
+    /* 子对象形态是 {...}（不带引号）；只有字符串值才需要去两侧引号 */
+    let body: &[u8] = if inner[0] == b'"' { &inner[1..inner.len() - 1] } else { &inner[..] };
+    let v = get_str_value(body, key)?;
+    if v.len() < 2 || v[0] != b'"' { return None; }
+    Some(v[1..v.len() - 1].to_vec())
+}
+
 fn get_str_value(params: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     let (v0, v1) = find_key(params, key)?;
     if v1 < v0 + 2 || params[v0] != b'"' { return None; }
@@ -1500,9 +1519,13 @@ fn body_initialize(sv: &mut McpSrv, r: &Req) -> Vec<u8> {
         None => b.extend_from_slice(b"\"2025-11-25\""),
     }
     sv.proto = String::from_utf8_lossy(&eff).into_owned();
-    b.extend_from_slice(br#","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true}"#);
+    b.extend_from_slice(br#","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true"#);
+    /* v0.7（A5）：templates 是 resources 对象内部的键（与 C 同） */
+    b.extend_from_slice(b",\"templates\":{}}");
     /* prompts 恒存在（mock 固定注册 1 个） */
     b.extend_from_slice(b",\"prompts\":{\"listChanged\":true}");
+    /* v0.7（A5）：completions 与 logging 同级 */
+    b.extend_from_slice(b",\"completions\":{}");
     b.extend_from_slice(b",\"logging\":{}}");
     b.extend_from_slice(b",\"serverInfo\":{\"name\":");
     b.extend_from_slice(&json_escape(sv.sess_fw().0.as_bytes()));
@@ -1626,6 +1649,55 @@ fn parse_resource_uri(uri: &[u8]) -> Option<(Vec<u8>, u32)> {
         }
     }
     Some((name, cursor))
+}
+
+/* v0.7（A5）：资源模板（与 mock 的 MOCK_TPL 一致） */
+struct Tpl { uri: &'static [u8], name: &'static [u8], desc: &'static [u8],
+             title: &'static [u8], mime: &'static [u8] }
+const TEMPLATES: &[Tpl] = &[
+    Tpl { uri: b"bt-mcp://dev/{name}/log", name: b"log_tpl",
+          desc: b"device log", title: b"Log", mime: b"text/plain" },
+];
+
+fn templates_list(_sv: &McpSrv, r: &Req) -> Vec<u8> {
+    let total = TEMPLATES.len() as u16;
+    let (start, end) = page_of(r, total);
+    let mut b = Vec::new();
+    b.extend_from_slice(b"\"resourceTemplates\":[");
+    for (i, t) in TEMPLATES.iter().enumerate().take(end).skip(start) {
+        if i != start { b.push(b','); }
+        b.extend_from_slice(b"{\"uriTemplate\":");
+        b.extend_from_slice(&json_escape(t.uri));
+        b.extend_from_slice(b",\"name\":");
+        b.extend_from_slice(&json_escape(t.name));
+        b.extend_from_slice(b",\"title\":");
+        b.extend_from_slice(&json_escape(t.title));
+        b.extend_from_slice(b",\"description\":");
+        b.extend_from_slice(&json_escape(t.desc));
+        b.extend_from_slice(b",\"mimeType\":");
+        b.extend_from_slice(&json_escape(t.mime));
+        b.push(b'}');
+    }
+    b.push(b']');
+    put_next_cursor(&mut b, end, total);
+    b
+}
+
+/* 补全：与 mock 的 mock_complete 同语义（alpha/beta/gamma 前缀过滤） */
+fn complete_body(r: &Req) -> Vec<u8> {
+    const ALL: [&[u8]; 3] = [b"alpha", b"beta", b"gamma"];
+    let av = sub_get_str(&r.params, b"argument", b"value").unwrap_or_default();
+    let mut b = Vec::new();
+    b.extend_from_slice(b"\"completion\":{\"values\":[");
+    let mut first = true;
+    for v in ALL.iter() {
+        if !av.is_empty() && !v.starts_with(&av[..]) { continue; }
+        if !first { b.push(b','); }
+        first = false;
+        b.extend_from_slice(&json_escape(v));
+    }
+    b.extend_from_slice(b"]}");
+    b
 }
 
 fn resources_list(sv: &McpSrv, r: &Req) -> Vec<u8> {
@@ -1920,6 +1992,14 @@ fn rx_one(sv: &mut McpSrv, json: &[u8]) -> i32 {
     }
     if r.method == b"resources/list" {
         let body = resources_list(sv, &r);
+        return respond(sv, &r, &body);
+    }
+    if r.method == b"resources/templates/list" {
+        let body = templates_list(sv, &r);
+        return respond(sv, &r, &body);
+    }
+    if r.method == b"completion/complete" {
+        let body = complete_body(&r);
         return respond(sv, &r, &body);
     }
     if r.method == b"resources/read" {

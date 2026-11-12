@@ -644,12 +644,22 @@ static int body_initialize(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r, void 
     /* capabilities：如实反映本实现支持的通知能力 */
     if (!rc) rc = kv_raw_new(w, "capabilities",
         "{\"tools\":{\"listChanged\":true},"
-        "\"resources\":{\"subscribe\":true,\"listChanged\":true}",
+        "\"resources\":{\"subscribe\":true,\"listChanged\":true",
         sizeof "{\"tools\":{\"listChanged\":true},"
-               "\"resources\":{\"subscribe\":true,\"listChanged\":true}" - 1);
+               "\"resources\":{\"subscribe\":true,\"listChanged\":true" - 1);
+    /* v0.7（A5）：模板能力是 resources 对象**内部**的键（不是并列键——
+     * 并列会出现重复的 "resources"，那是非法/歧义 JSON）。 */
+    if (!rc && sv->cfg.templates_count)
+        rc = bt_mcp_w_raw(w, ",\"templates\":{}",
+                          sizeof ",\"templates\":{}" - 1);
+    if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
     if (!rc && sv->cfg.prompts_count)
         rc = bt_mcp_w_raw(w, ",\"prompts\":{\"listChanged\":true}", 
                           sizeof ",\"prompts\":{\"listChanged\":true}" - 1);
+    /* v0.7（A5）：completions 是 capabilities 的并列键（与 logging 同级） */
+    if (!rc && sv->cfg.complete)
+        rc = bt_mcp_w_raw(w, ",\"completions\":{}",
+                          sizeof ",\"completions\":{}" - 1);
     if (!rc) rc = bt_mcp_w_raw(w, ",\"logging\":{}}",
                                sizeof ",\"logging\":{}}" - 1);
     /* serverInfo */
@@ -833,6 +843,94 @@ static int body_resources_list(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r,
     if (!rc) rc = bt_mcp_w_raw(w, "]", 1);
     if (!rc) rc = put_next_cursor(w, end, sv->cfg.resources_count);
     return rc;
+}
+
+/* v0.7（A5）：resources/templates/list —— 只声明模板，不含读取语义 */
+static int body_templates_list(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r,
+                               void *arg)
+{
+    bt_mcp_server_t *sv = arg;
+    uint32_t start, end;
+    page_of(r, sv->cfg.templates_count, &start, &end);
+
+    int rc = bt_mcp_w_raw(w, "\"resourceTemplates\":[",
+                          sizeof "\"resourceTemplates\":[" - 1);
+    w->need_comma = 0;
+    for (uint32_t i = start; !rc && i < end; i++) {
+        const bt_mcp_resource_template_t *d = &sv->cfg.templates[i];
+        if (i != start) rc = bt_mcp_w_raw(w, ",", 1);
+        if (!rc) rc = bt_mcp_w_raw(w, "{\"uriTemplate\":",
+                                   sizeof "{\"uriTemplate\":" - 1);
+        if (!rc) rc = bt_mcp_w_str_lit(w, d->uri_template);
+        if (!rc) rc = bt_mcp_w_raw(w, ",\"name\":", sizeof ",\"name\":" - 1);
+        if (!rc) rc = bt_mcp_w_str_lit(w, d->name ? d->name : d->uri_template);
+        if (!rc && d->title) {
+            rc = bt_mcp_w_raw(w, ",\"title\":", sizeof ",\"title\":" - 1);
+            if (!rc) rc = bt_mcp_w_str_lit(w, d->title);
+        }
+        if (!rc && d->desc) {
+            rc = bt_mcp_w_raw(w, ",\"description\":",
+                              sizeof ",\"description\":" - 1);
+            if (!rc) rc = bt_mcp_w_str_lit(w, d->desc);
+        }
+        if (!rc && d->mime_type) {
+            rc = bt_mcp_w_raw(w, ",\"mimeType\":", sizeof ",\"mimeType\":" - 1);
+            if (!rc) rc = bt_mcp_w_str_lit(w, d->mime_type);
+        }
+        w->need_comma = 1;
+        if (!rc) rc = bt_mcp_w_raw(w, "}", 1);
+        w->need_comma = 0;
+    }
+    if (!rc) rc = bt_mcp_w_raw(w, "]", 1);
+    if (!rc) rc = put_next_cursor(w, end, sv->cfg.templates_count);
+    return rc;
+}
+
+/* v0.7（A5）：completion/complete
+ * 请求形如 {"ref":{"type":"ref/prompt","name":"x"},"argument":{"name":"a","value":"v"}}
+ * 响应形如 {"completion":{"values":[...],"total"?,"hasMore"?}}
+ * 未注册 complete 回调或回调说"不支持" → 回**空 values 列表**（规范允许），
+ * 而不是 -32601/-32603——Host 更希望拿到空补全而不是错误。 */
+static int body_complete(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r,
+                         void *arg)
+{
+    bt_mcp_server_t *sv = arg;
+    if (!sv->cfg.complete) {
+        return bt_mcp_w_raw(w, "\"completion\":{\"values\":[]}",
+                            sizeof "\"completion\":{\"values\":[]}" - 1);
+    }
+    /* 从 params.ref 取 type/name，从 params.argument 取 name/value */
+    bt_mcp_json_req_t ref, argm;
+    const char *ref_type = "", *ref_name = "", *arg_name = "", *arg_value = "";
+    uint16_t rt_l = 0, rn_l = 0, an_l = 0, av_l = 0;
+    if (!bt_mcp_json_get_sub(r, "ref", &ref)) {
+        const char *v; uint16_t vl;
+        if (!bt_mcp_json_get_str(&ref, "type", &v, &vl)) { ref_type = v; rt_l = vl; }
+        if (!bt_mcp_json_get_str(&ref, "name", &v, &vl)) { ref_name = v; rn_l = vl; }
+    }
+    if (!bt_mcp_json_get_sub(r, "argument", &argm)) {
+        const char *v; uint16_t vl;
+        if (!bt_mcp_json_get_str(&argm, "name", &v, &vl)) { arg_name = v; an_l = vl; }
+        if (!bt_mcp_json_get_str(&argm, "value", &v, &vl)) { arg_value = v; av_l = vl; }
+    }
+    /* 注意：get_str 返回的是 (指针, 长度) 切片，不是 C 串——长度必须一起传。 */
+    const char *const *vals = NULL;
+    uint16_t n = 0;
+    int rc = sv->cfg.complete(sv->cfg.complete_user,
+                              ref_type, rt_l, ref_name, rn_l,
+                              arg_name, an_l, arg_value, av_l, &vals, &n);
+    int wr = bt_mcp_w_raw(w, "\"completion\":{\"values\":[",
+                          sizeof "\"completion\":{\"values\":[" - 1);
+    w->need_comma = 0;
+    if (!wr && rc == 0 && vals) {
+        for (uint16_t i = 0; !wr && i < n; i++) {
+            if (i) wr = bt_mcp_w_raw(w, ",", 1);
+            if (!wr) wr = bt_mcp_w_str_lit(w, vals[i]);
+            w->need_comma = 0;
+        }
+    }
+    if (!wr) wr = bt_mcp_w_raw(w, "]}", 2);
+    return wr;
 }
 
 static int body_resources_read(bt_mcp_writer_t *w, const bt_mcp_json_req_t *r,
@@ -1325,6 +1423,10 @@ static int rx_one(bt_mcp_server_t *sv, const uint8_t *json, uint32_t len)
     }
     if (method_is(&r, "resources/list"))
         return respond(sv, &r, body_resources_list, sv);
+    if (method_is(&r, "resources/templates/list"))
+        return respond(sv, &r, body_templates_list, sv);
+    if (method_is(&r, "completion/complete"))
+        return respond(sv, &r, body_complete, sv);
     if (method_is(&r, "resources/read")) {
         rc = respond(sv, &r, body_resources_read, sv);
         if (rc == BT_MCP_E_ARGS)

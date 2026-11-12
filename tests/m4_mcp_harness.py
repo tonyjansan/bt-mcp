@@ -392,5 +392,24 @@ def main():
           f"random={rounds})")
 
 
+
+@scenario
+def v07_templates_complete(rng):
+    """v0.7（A5）：resources/templates/list 与 completion/complete。"""
+    msgs = init_seq() + [
+        b'{"jsonrpc":"2.0","id":2,"method":"resources/templates/list"}',
+        b'{"jsonrpc":"2.0","id":3,"method":"completion/complete",'
+        b'"params":{"ref":{"type":"ref/prompt","name":"p"},'
+        b'"argument":{"name":"a","value":"al"}}}',
+        b'{"jsonrpc":"2.0","id":4,"method":"completion/complete",'
+        b'"params":{"ref":{"type":"ref/prompt","name":"p"},'
+        b'"argument":{"name":"a","value":""}}}',
+        b'{"jsonrpc":"2.0","id":5,"method":"completion/complete"}',
+        b'{"jsonrpc":"2.0","id":6,"method":"resources/templates/list",'
+        b'"params":{"cursor":"99"}}',
+    ]
+    return script(0, 0, [(b"echo", b"echo tool")], msgs)
+
+
 if __name__ == "__main__":
     main()

@@ -1,0 +1,92 @@
+# nightly.yml —— 每日高强度回归（v0.7 A6）
+#
+# 与 PR 上的 ci.yml 分工：
+#   ci.yml    ：快速门禁（差分 40 轮、fuzz 30 万次），必须几分钟内出结果；
+#   nightly   ：高强度（差分 400 轮、fuzz 200 万次、soak 全量），可以跑 30 分钟。
+#
+# 动机（v0.6 的教训）：`last_ctrl_ms` 两侧漂移只在 m3 @300 轮时才暴露，
+# 40 轮跑不出来；信用死锁也只在 soak 长跑里出现。这类问题需要在**固定节奏**
+# 的高强度回归里兜住，而不是等发布前临时加轮数。
+name: nightly
+
+on:
+  schedule:
+    # 每日 UTC 18:00（北京时间 02:00），避开工作时段
+    - cron: '0 18 * * *'
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  heavy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          cc --version
+          python3 --version
+          # 注意别写 `rustc --version || apt update && apt install`：
+          # shell 里那是 (A || B) && C，每次都会执行安装。
+          if ! command -v rustc >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y rustc cargo
+          fi
+          rustc --version
+
+      - name: Build mock + oracle
+        run: |
+          mkdir -p build
+          cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+             mock/mock_main.c core/src/*.c -o build/btmcp_mock
+          ( cd oracle && cargo build --release --quiet )
+
+      - name: Differential @400 rounds
+        run: |
+          python3 tests/diff_harness.py 400
+          python3 tests/m3_session_harness.py 400
+          python3 tests/m4_mcp_harness.py 400
+          python3 tests/m4b_e2e_harness.py 300
+
+      - name: Orthogonal matrix @100 rounds
+        run: python3 tests/matrix_runner.py --rounds 100
+
+      - name: Structure-aware L5 fuzz @2M
+        run: |
+          cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+             fuzz/fuzz_l5.c core/src/*.c -o build/fuzz_l5
+          ./build/fuzz_l5 2000000
+
+      - name: Frame fuzz @5M
+        run: |
+          cc -O2 -std=c99 -Icore/include -DBT_MCP_FUZZ_MAIN \
+             fuzz/fuzz_frame.c core/src/frame.c core/src/trace.c \
+             -o build/fuzz_frame
+          ./build/fuzz_frame 5000000
+
+      - name: Link simulator soak (all scenarios)
+        run: |
+          cc -O2 -std=c99 -Wall -Wextra -Werror -Icore/include \
+             tests/test_soak.c core/src/frame.c core/src/session.c \
+             core/src/trace.c -o build/test_soak -lpthread
+          ./build/test_soak
+
+      - name: Concurrency stress under TSan
+        run: |
+          cc -O1 -g -std=c99 -fsanitize=thread -Icore/include \
+             tests/test_stress.c core/src/*.c -o build/test_stress_tsan -lpthread
+          ./build/test_stress_tsan
+
+      - name: ASan / UBSan full diff
+        run: |
+          cc -O1 -g -std=c99 -fsanitize=address,undefined -Icore/include \
+             mock/mock_main.c core/src/*.c -o build/btmcp_mock_asan
+          BT_MCP_MOCK=build/btmcp_mock_asan python3 tests/diff_harness.py 200
+          BT_MCP_MOCK=build/btmcp_mock_asan python3 tests/m3_session_harness.py 200
+          BT_MCP_MOCK=build/btmcp_mock_asan python3 tests/m4_mcp_harness.py 200
+
+      - name: RAM budget gate
+        run: python3 tools/ram_baseline.py
+
+      - name: Docs consistency
+        run: python3 tools/check_docs.py

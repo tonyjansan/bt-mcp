@@ -123,6 +123,33 @@ typedef struct {
     void       *user;
 } bt_mcp_resource_def_t;
 
+/* v0.7（A5）：资源模板（resources/templates/list）。
+ * 与 resource 的区别：uriTemplate 含 {占位} 参数，代表**一族**资源，
+ * 例如 bt-mcp://dev/{name}/log。本实现的子集只声明模板；实际读取仍走
+ * resources/read，由应用在 read 回调里自行解析 URI。 */
+typedef struct {
+    const char *uri_template;   /* 必填 */
+    const char *name;
+    const char *desc;
+    const char *title;
+    const char *mime_type;
+} bt_mcp_resource_template_t;
+
+/* v0.7（A5）：completion/complete 回调：为某个参数补全候选值。
+ * 返回 0 = 成功（out/n 已填）；非 0 = 不支持 → 服务器回**空列表**
+ * （规范允许），而不是报错。out 指向静态字符串数组，服务器只读。
+ *
+ * **重要契约**：字符串入参是 get_str 的产物——指向请求原文的切片，
+ * **不是 NUL 结尾的 C 串**，必须用配套的 *_len 比较（memcmp/strncmp 配长度）。
+ * 早期版本的接口只传指针，回调里 strlen() 会越界读到后面的 JSON
+ * ——这是 v0.7 实现时踩到的真实坑。转义序列在切片中**仍然存在**。 */
+typedef int (*bt_mcp_complete_fn)(void *user,
+                                  const char *ref_type, uint16_t ref_type_len,
+                                  const char *ref_name, uint16_t ref_name_len,
+                                  const char *arg_name, uint16_t arg_name_len,
+                                  const char *arg_value, uint16_t arg_value_len,
+                                  const char *const **out, uint16_t *n);
+
 typedef struct {
     const char          *name;
     const char          *desc;      /* 可空 */
@@ -142,6 +169,11 @@ typedef struct {
     uint16_t                     prompts_count;
     bt_mcp_consent_fn            consent;   /* 可空：AUTHZ_CONSENT 时必填 */
     void                        *consent_user;
+    /* v0.7（A5）：资源模板与补全（都可空；为空则对应方法回空列表/不支持） */
+    const bt_mcp_resource_template_t *templates;
+    uint16_t                          templates_count;
+    bt_mcp_complete_fn                complete;
+    void                             *complete_user;
 } bt_mcp_server_cfg_t;
 
 /* 二进制内容（image/audio）的 base64 编码长度上限 */

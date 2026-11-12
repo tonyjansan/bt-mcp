@@ -272,6 +272,28 @@ static const bt_mcp_prompt_def_t MOCK_PROMPTS[] = {
 #define MOCK_RES_COUNT ((uint16_t)(sizeof MOCK_RES / sizeof MOCK_RES[0]))
 
 /* 注意：与 run_mcp 不同，这里不预读全量输入，而是逐帧处理并立即 flush 输出。 */
+/* ---- v0.7（A5）：资源模板与补全（让差分覆盖两个新方法） ---- */
+static const bt_mcp_resource_template_t MOCK_TPL[] = {
+    { "bt-mcp://dev/{name}/log", "log_tpl", "device log", "Log", "text/plain" },
+};
+
+/* 补全回调：入参是 (指针,长度) 切片，不是 C 串；按已输入前缀过滤。 */
+static int mock_complete(void *u, const char *rt, uint16_t rtl,
+                         const char *rn, uint16_t rnl,
+                         const char *an, uint16_t anl,
+                         const char *av, uint16_t avl,
+                         const char *const **out, uint16_t *n)
+{
+    (void)u; (void)rt; (void)rtl; (void)rn; (void)rnl; (void)an; (void)anl;
+    static const char *const ALL[] = { "alpha", "beta", "gamma" };
+    static const char *F[3];
+    int k = 0;
+    for (int i = 0; i < 3; i++)
+        if (!avl || !strncmp(ALL[i], av, avl)) F[k++] = ALL[i];
+    *out = F; *n = (uint16_t)k;
+    return 0;
+}
+
 static int run_pipe(void)
 {
     static bt_mcp_framer_t fr;
@@ -296,7 +318,10 @@ static int run_pipe(void)
         .resources_count = MOCK_RES_COUNT,
         .prompts = MOCK_PROMPTS,
         .prompts_count = MOCK_PROMPT_COUNT,
-        .consent = consent_cb };
+        .consent = consent_cb,
+        .templates = MOCK_TPL,
+        .templates_count = 1,
+        .complete = mock_complete };
     bt_mcp_server_init(&sv, &se, &cfg, "bt-mcp-device", "0.5");
 
     for (;;) {
@@ -698,7 +723,10 @@ static int run_mcp(const uint8_t *in, size_t in_len)
                                   .resources_count = MOCK_RES_COUNT,
                                   .prompts = MOCK_PROMPTS,
                                   .prompts_count = MOCK_PROMPT_COUNT,
-                                  .consent = consent_cb };
+                                  .consent = consent_cb,
+        .templates = MOCK_TPL,
+        .templates_count = 1,
+        .complete = mock_complete };
     if (bt_mcp_server_init(&sv, &se, &sv_cfg, "bt-mcp-device", "0.5")) return 2;
 
     int32_t rc = 0;
@@ -936,7 +964,10 @@ static int run_e2e(const uint8_t *in, size_t in_len)
                                   .resources_count = MOCK_RES_COUNT,
                                   .prompts = MOCK_PROMPTS,
                                   .prompts_count = MOCK_PROMPT_COUNT,
-                                  .consent = consent_cb };
+                                  .consent = consent_cb,
+        .templates = MOCK_TPL,
+        .templates_count = 1,
+        .complete = mock_complete };
     if (bt_mcp_server_init(&sv, &ss, &sv_cfg, "bt-mcp-device", "0.5")) return 2;
 
     g_pump_sv = &sv;

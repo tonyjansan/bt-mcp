@@ -57,9 +57,9 @@ v0.6 一整轮只抓到 2 个真缺陷（信用死锁、writer 错误语义）�
 | A1 | 重复投递根因 | ✅ **已修复** | 根因 = `DEDUPE_MS`(5s) < 重传寿命(9s)；修复为 20000 + 发送侧 stale 守卫。8 场景 **dups 全零**（原 2~5/120） |
 | A2 | 小 MTU 交付率 | ✅ **已达标** | 23% → **57%**（目标 ≥50%）。NACK 改尾部重放 + REPLAY_MAX=16 + 预算×16。遗留：应改乱序缓存+位图 |
 | A3 | 分支覆盖 | 待做 | — |
-| A4 | mcp_client 去 snprintf | 待做 | — |
-| A5 | templates/list + completion/complete | 待做 | — |
-| A6 | soak 进 nightly | 待做 | — |
+| A4 | mcp_client 去 snprintf | ✅ **已做** | 顺带发现并修掉「工具名/URI 未转义」的真 bug；core 编译期不再需要 printf。代价 +896B（已记录） |
+| A5 | templates/list + completion/complete | ✅ **已做** | 两个方法都已实现并进差分；顺带修掉 oracle `find_key` 不支持嵌套对象值的缺陷 |
+| A6 | soak 进 nightly | ✅ **已做** | 新增 `.github/workflows/nightly.yml`（差分 400 轮 / fuzz 200 万 / soak 全量 / TSan / ASan），每日 UTC18 跑 |
 | A7 | MTU 热更新进差分 | ✅ **已补** | 排查中发现该公开 API 从未被差分覆盖；已加 op 0x09 + harness 场景 |
 
 ### P0（必须）

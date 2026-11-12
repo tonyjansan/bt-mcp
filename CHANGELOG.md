@@ -23,6 +23,12 @@
 
 ### 新增
 
+- **`resources/templates/list`** 与 **`completion/complete`**（v0.7 A5）：
+  新增 `bt_mcp_resource_template_t` 与 `bt_mcp_complete_fn`；
+  两者都只在注册后才在 `capabilities` 里声明。`completion` 回调的字符串入参
+  是 **(指针,长度) 切片**（不是 NUL 结尾的 C 串）——这是实现时踩到的真实坑。
+- **nightly 高强度回归**（`.github/workflows/nightly.yml`）：差分 400 轮、
+  fuzz 200 万次、soak 全量、TSan 并发、ASan 全量差分，每日跑。
 - `bt_mcp_framer_frag_count()`：消息在当前 MTU 下的分片数（公开 API）。
 - `BT_MCP_CFG_NACK_REPLAY_MAX`（默认 16）、`BT_MCP_CFG_NACK_REPLAY_BUDGET_X`（默认 16）。
 - 差分覆盖 MTU 热更新：mock/oracle 新增 op `0x09 SET_MTU`，oracle 增加
