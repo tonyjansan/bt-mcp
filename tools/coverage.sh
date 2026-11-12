@@ -18,7 +18,7 @@
 set -e
 
 LINE_MIN=${1:-95}
-BRANCH_MIN=${2:-68}
+BRANCH_MIN=${2:-69}
 OUT=build/cov
 mkdir -p "$OUT"
 
@@ -67,6 +67,8 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC \
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_fault.c $CORE -o "$OUT/t_fault"
 $CC -O0 -g -std=c99 $COVFLAGS $INC \
+    tests/test_branches.c $CORE -o "$OUT/t_branches"
+$CC -O0 -g -std=c99 $COVFLAGS $INC \
     tests/test_matrix.c $CORE -o "$OUT/t_matrix"
 # v0.6 N1：**受限资源配置**下跑同一套矩阵——强制走容量不足分支
 # （TOOBIG / 分页边界 / 缓冲耗尽），这些分支在默认大缓冲下永不执行。
@@ -87,7 +89,7 @@ $CC -O0 -g -std=c99 $COVFLAGS $INC -DBT_MCP_CFG_MAX_MSG=256 \
 
 echo "== 运行 =="
 rm -f "$OUT"/*.profraw
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_branches t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     LLVM_PROFILE_FILE="$OUT/$t.profraw" "$OUT/$t" > "$OUT/$t.log" 2>&1 || {
         echo "FAIL: $t"; tail -5 "$OUT/$t.log"; exit 1; }
 done
@@ -95,7 +97,7 @@ done
 echo "== 汇总 =="
 "$LLVM_PROFDATA" merge -sparse "$OUT"/*.profraw -o "$OUT/all.profdata"
 OBJS=""
-for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
+for t in t_m2 t_rel t_lossy t_client t_reent t_fcs t_conf t_stress t_multi t_edges t_l5e t_jc t_fault t_branches t_matrix t_matrix_s96 t_matrix_s128 t_matrix_s192 t_matrix_s256; do
     OBJS="$OBJS -object=$OUT/$t"
 done
 "$LLVM_COV" report $OBJS -instr-profile="$OUT/all.profdata" \

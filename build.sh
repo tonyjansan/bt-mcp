@@ -116,6 +116,10 @@ echo "== §4 故障注入（错误传播链） =="
 $CC $CFLAGS tests/test_fault.c $CORE -o build/test_fault
 ./build/test_fault
 
+echo "== §4 条件级分支覆盖补测（v0.7 A3） =="
+$CC $CFLAGS tests/test_branches.c $CORE -o build/test_branches
+./build/test_branches
+
 echo "== §4 组合矩阵（表驱动，自动生成用例） =="
 $CC $CFLAGS tests/test_matrix.c $CORE -o build/test_matrix
 ./build/test_matrix
