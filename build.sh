@@ -170,7 +170,9 @@ BT_MCP_MOCK=build/btmcp_mock_shared BT_MCP_MAX_REASM=1 \
     python3 tests/m3_session_harness.py 40
 
 echo "== §6 独立第二实现校验（第三条腿，防「C 与 Rust 一起错」） =="
-python3 tests/cross_impl_l3.py 30
+# 注意 -B：macOS 把 .pyc 缓存放在 ~/Library/Caches/com.apple.python/ 下
+# （仓库之外），改了 tests/*.py 却"不生效"时就是它在作祟。
+python3 -B tests/cross_impl_l3.py 30
 
 echo "== §6 正交差分矩阵（配置签名 + 笛卡尔积） =="
 python3 tests/matrix_runner.py --rounds 30

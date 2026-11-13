@@ -110,8 +110,31 @@ def verify_stream(stream, label, fcs16=False):
     return frames
 
 
+# 规范 §4.2 的控制帧类型表（**照抄文档，不照抄实现**）。
+# 独立解析器里的常量必须与这张表一致——第一版我凭记忆写错了 5 个，
+# 只用于打印名称所以测试全绿、错误完全隐蔽。这条断言就是为了堵住它。
+SPEC_CTRL_TABLE = {
+    'CREDIT': 0x01, 'PING': 0x02, 'RESUME_REQ': 0x03, 'RESUME_OK': 0x04,
+    'RESUME_REJ': 0x05, 'ACK': 0x06, 'NACK': 0x07,
+}
+
+
+def check_ctrl_table():
+    """独立解析器的常量必须与规范表一致（防止「凭记忆写常量」）。"""
+    actual = {
+        'CREDIT': l3.CTRL_CREDIT, 'PING': l3.CTRL_PING,
+        'RESUME_REQ': l3.CTRL_RESUME_REQ, 'RESUME_OK': l3.CTRL_RESUME_OK,
+        'RESUME_REJ': l3.CTRL_RESUME_REJ, 'ACK': l3.CTRL_ACK,
+        'NACK': l3.CTRL_NACK,
+    }
+    for name, want in SPEC_CTRL_TABLE.items():
+        check(actual.get(name) == want,
+              f'控制帧类型码 {name} = {actual.get(name)}，规范表要求 0x{want:02x}')
+
+
 def main():
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    check_ctrl_table()
     if not os.path.exists(MOCK) or not os.path.exists(ORACLE):
         print('SKIP: 需要先构建 build/btmcp_mock 与 oracle/target/release/oracle')
         return 0

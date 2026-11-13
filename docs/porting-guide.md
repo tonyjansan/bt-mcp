@@ -1,4 +1,4 @@
-# BT-MCP 移植指南（v0.8 B2）
+# BT-MCP 移植指南（v0.9.1）
 
 > **本文档的诚实前提**：以下参考实现是**按真实栈的 API 写的、经人工核对但未在本机编译验证**的
 > （本机无 Zephyr/NimBLE SDK、无 ARM 工具链、无 Linux/BlueZ）。它的作用是给出
@@ -148,11 +148,24 @@ k_work_schedule(&g_work, K_MSEC(50));
    （v0.7 A1 修的正是这个；看 `stat_rx_dup` 与 `stat_tx_stale_drop`）。
 6. **RAM 实测**：`arm-none-eabi-size` 对比 demo 与空工程，和 §5 的表比对。
 
+## 6.5 两个必须知道的实现约束（v0.9.1）
+
+**① MTU 不能在一条消息中途变化。** 接收侧用 `idx * chunk` 计算分片偏移，
+chunk 在消息开始时确定。若 MTU 中途变了，已收到的片落在旧边界、后续片落在
+新边界，拼出来是垃圾。因此 `bt_mcp_framer_set_mtu()` 在 chunk 变化时会
+**弃掉全部在途重组槽**（这些消息本就不可能正确完成，由消息级重传重新发）。
+所以你应当在 `MTU 协商完成` 后再让 MCP 流量开始，而不是边协商边传。
+
+**② NACK 载荷是 `type | seq | count | idx[count]`。**
+`count == 1` 时与旧格式（`type | seq | idx`）**字节完全一致**，所以与老对端
+互通是安全的。若你自己实现一份，建议直接实现新格式。
+
 ## 7. 已知未验证项（如实记录）
 
 | 项 | 状态 |
 |---|---|
 | 参考实现能否直接编译 | ❌ 未验证（无 SDK）。API 名称按 NimBLE 官方文档核对 |
+| 目标代码体积 | ✅ **v0.9.1 已用真 Thumb-2 交叉编译量出**：core 约 42.5KB（`tools/footprint.py --arm`），FCS16 +2.4KB、TRACE +0.45KB |
 | 真实 MTU 协商行为 | ❌ 未上板。`mtu-3` 的预扣按 ATT 规范推断 |
 | 真实 notify 背压语义 | ❌ 未上板。`E_AGAIN`/`E_NOMEM` 的映射是推断 |
 | 固件 RAM 增量 | ❌ 无 ARM 工具链。§5 只有结构体大小 |

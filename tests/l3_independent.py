@@ -38,21 +38,26 @@ FLAG_LAST = 0x01
 FLAG_CHUNK = 0x02
 FLAG_CTRL = 0x04
 
-# 控制帧类型（按规范文本，不查实现）
-CTRL_CREDIT = 1
-CTRL_ACK = 2
-CTRL_PING = 3
-CTRL_PONG = 4
-CTRL_RESUME_REQ = 5
-CTRL_RESUME_OK = 6
-CTRL_NACK = 7
-CTRL_RESUME_REJ = 8
+# 控制帧类型（按 docs/bt-mcp-protocol-spec.md §4.2 的表）
+#
+# ⚠️ 诚实记录：本文件第一版这几个常量是**凭记忆写的**（ACK=2, PING=3,
+# RESUME_REQ=5, NACK=7, RESUME_REJ=8），与规范表全对不上。
+# 这恰好暴露了「独立实现」的软肋：独立性靠的是**照着规范文本写**，
+# 不是靠"不打开实现文件"。凭记忆写出的常量仍然会错，而且因为只用于
+# 打印名称，测试不会因此变红——比直接抄错的代码更隐蔽。
+# 现已按规范 §4.2 校正，并在 check 里加了「类型码必须与规范表一致」的断言。
+CTRL_CREDIT = 0x01
+CTRL_PING = 0x02
+CTRL_RESUME_REQ = 0x03
+CTRL_RESUME_OK = 0x04
+CTRL_RESUME_REJ = 0x05
+CTRL_ACK = 0x06
+CTRL_NACK = 0x07
 
 CTRL_NAMES = {
-    CTRL_CREDIT: 'CREDIT', CTRL_ACK: 'ACK', CTRL_PING: 'PING',
-    CTRL_PONG: 'PONG', CTRL_RESUME_REQ: 'RESUME_REQ',
-    CTRL_RESUME_OK: 'RESUME_OK', CTRL_NACK: 'NACK',
-    CTRL_RESUME_REJ: 'RESUME_REJ',
+    CTRL_CREDIT: 'CREDIT', CTRL_PING: 'PING',
+    CTRL_RESUME_REQ: 'RESUME_REQ', CTRL_RESUME_OK: 'RESUME_OK',
+    CTRL_RESUME_REJ: 'RESUME_REJ', CTRL_ACK: 'ACK', CTRL_NACK: 'NACK',
 }
 
 

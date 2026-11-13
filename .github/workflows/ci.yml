@@ -45,7 +45,7 @@ jobs:
           ./build/fuzz_l5 2000000
 
       - name: Independent second implementation check
-        run: python3 tests/cross_impl_l3.py 30
+        run: python3 -B tests/cross_impl_l3.py 30
 
       - name: Orthogonal differential matrix
         run: |
