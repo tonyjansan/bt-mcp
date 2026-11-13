@@ -402,7 +402,7 @@ static bt_mcp_call_t *call_alloc(bt_mcp_server_t *sv, const bt_mcp_json_req_t *r
         memset(c, 0, sizeof(*c));
         c->srv = sv;
         c->in_use = 1;
-        c->id_is_str = r->id_is_str;
+        c->id_is_str = r->id_is_str ? 1u : 0u;   /* int(0/1) → u8，显式收敛 */
         c->id_num = r->id_num;
         if (r->id_is_str) {
             uint16_t n = r->id_str_len;

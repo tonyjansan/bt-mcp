@@ -18,9 +18,17 @@
 **每次都先做一次自测**：把一段已知有缺陷的代码喂给分析器，
 要求它**必须报出缺陷**。自测不过就说明门禁已失效，直接 fail。
 
+除了 `clang --analyze`（路径敏感缺陷），本工具还做**严格告警矩阵**：
+把 core 在「每个编译期配置组合」下用一组很严的告警开关编译一遍。
+
+为什么需要矩阵：单一配置下干净的代码，换个配置就可能冒出未用变量、
+指针窄化、隐式符号转换——因为这些分支在默认配置里根本没参与编译。
+v0.9.1 加这个矩阵时，立刻就抓到 `c->id_is_str = r->id_is_str`
+（int → uint8_t 隐式窄化），默认告警集看不见。
+
 ## 用法
 
-    python3 tools/static_analysis.py          # 门禁（自测 + 全量扫描）
+    python3 tools/static_analysis.py          # 门禁（自测 + 分析 + 告警矩阵）
     python3 tools/static_analysis.py --update # 更新基线（需 review diff）
 """
 import json
@@ -88,6 +96,46 @@ def selftest():
         os.unlink(tmp.name)
 
 
+# 严格告警集：比 -Wall -Wextra 更严，专门抓「跨配置才会暴露」的问题
+STRICT_WARNINGS = [
+    '-Wall', '-Wextra', '-Wpedantic', '-Wshadow', '-Wconversion',
+    '-Wsign-conversion', '-Wcast-qual', '-Wstrict-prototypes',
+    '-Wmissing-prototypes', '-Wundef',
+]
+
+# 配置矩阵：每个组合都要零告警
+CONFIG_MATRIX = [
+    ('default', []),
+    ('fcs16', ['-DBT_MCP_CFG_FCS16=1']),
+    ('trace', ['-DBT_MCP_CFG_TRACE=1']),
+    ('shared_reasm', ['-DBT_MCP_CFG_SHARED_REASM=1']),
+    ('compact', ['-DBT_MCP_TIER=BT_MCP_TIER_COMPACT']),
+    ('full', ['-DBT_MCP_TIER=BT_MCP_TIER_FULL']),
+]
+
+
+def strict_warning_matrix():
+    """在配置矩阵下用严格告警集编译 core，返回 [(cfg, file, line, msg)]。"""
+    findings = []
+    srcs = sorted(f for f in os.listdir('core/src') if f.endswith('.c'))
+    for cfg_name, cfg_flags in CONFIG_MATRIX:
+        for f in srcs:
+            cmd = ([CC, '-c', '-O2', '-std=c99', '-Icore/include']
+                   + STRICT_WARNINGS + cfg_flags + [f'core/src/{f}', '-o', os.devnull])
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            for line in r.stderr.splitlines():
+                if 'warning:' not in line:
+                    continue
+                try:
+                    fname = os.path.basename(line.split(':')[0])
+                    line_no = int(line.split(':')[1])
+                except (IndexError, ValueError):
+                    fname, line_no = f, 0
+                msg = line.split('warning:', 1)[1].strip()
+                findings.append((cfg_name, fname, line_no, msg))
+    return findings
+
+
 def scan():
     findings = []
     for d in SCAN_DIRS:
@@ -109,6 +157,18 @@ def main():
 
     if not selftest():
         return 1
+
+    # ---- 严格告警矩阵（跨配置）----
+    sw = strict_warning_matrix()
+    if sw:
+        print(f'严格告警矩阵发现 {len(sw)} 条告警（这些在默认告警集下看不见）：')
+        for cfg, fname, line, msg in sw:
+            print(f'  [{cfg}] {fname}:{line}  {msg}')
+        print('\n提示：用 -Wconversion/-Wshadow 等开关暴露的是真实类型问题，'
+              '\n      不要用强制转换糊过去——先确认语义再显式收敛。')
+        return 1
+    print(f'严格告警矩阵通过：{len(CONFIG_MATRIX)} 个配置 × '
+          f'{len([f for f in os.listdir("core/src") if f.endswith(".c")])} 个文件，零告警')
 
     findings = scan()
     cur = {}

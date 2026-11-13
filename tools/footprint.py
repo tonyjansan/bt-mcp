@@ -22,9 +22,20 @@ M1 里程碑的 E4 要求「真实固件增量，与预测误差 ≤15%」——
 `arm-none-eabi-size` 量 demo 固件。本工具是 E4 之前能做到的最好近似，
 并且**明确标注它不是 E4**。
 
+## v0.9.1：ARM/Thumb-2 真交叉编译（大幅提升保真度）
+
+发现 clang 自带 Thumb-2 后端（`-target thumbv7m-none-eabi`），只是缺 ARM libc 头。
+core 总共只依赖 8 个 libc 函数，于是把最小声明放进 `tools/arm_freestanding/`，
+就能**真的编译出 Thumb-2 目标文件**并用 `llvm-size` 量出字节数。
+
+这比"宿主 x86-64 近似"可信得多。仍然不能替代 `arm-none-eabi-gcc` 的精确
+链接后体积（真实固件还要加 libc 实现、启动代码、栈），但已经能回答
+「哪个开关贵、贵多少、绝对量级是多少」——E4 的实质问题。
+
 ## 用法
 
-    python3 tools/footprint.py            # 表格
+    python3 tools/footprint.py            # 宿主（x86-64）表
+    python3 tools/footprint.py --arm      # ARM/Thumb-2 真交叉编译
     python3 tools/footprint.py --json     # 机器可读
 """
 import json
@@ -103,7 +114,75 @@ def build_and_measure(tier, variant_flags):
     return {'flash': flash, 'bss': bss, 'data': data, 'sections': total}
 
 
+ARM_TARGET = 'thumbv7m-none-eabi'   # Cortex-M3 类（nRF52/SAMD2x 常见档）
+ARM_INC = 'tools/arm_freestanding'
+
+
+def find_llvm_size():
+    for cand in ('llvm-size',):
+        r = subprocess.run(['which', cand], capture_output=True, text=True)
+        if r.returncode == 0:
+            return cand
+    # Xcode 里通常不在 PATH
+    import glob
+    for pat in ('/Applications/Xcode*.app/Contents/Developer/Toolchains/*/usr/bin/llvm-size',
+                '/usr/local/opt/llvm/bin/llvm-size', '/opt/homebrew/opt/llvm/bin/llvm-size'):
+        hits = glob.glob(pat)
+        if hits:
+            return hits[0]
+    return None
+
+
+def arm_measure(tier, extra_flags=()):
+    """真交叉编译到 Thumb-2，返回 {file: text}。"""
+    sz = find_llvm_size()
+    if not sz:
+        return None
+    os.makedirs(OUT, exist_ok=True)
+    out = {}
+    for src in sorted(f for f in os.listdir('core/src') if f.endswith('.c')):
+        obj = f'{OUT}/arm_{tier}_{src}.o'
+        cmd = [CC, '-target', ARM_TARGET, '-mthumb', '-c', '-O2', '-std=c99',
+               '-ffreestanding', '-nostdlib', f'-I{ARM_INC}', '-Icore/include',
+               f'-DBT_MCP_TIER=BT_MCP_TIER_{tier}'] + list(extra_flags)
+        cmd += [f'core/src/{src}', '-o', obj]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f'ARM 编译失败 {src}@{tier}: {r.stderr[:300]}')
+        r = subprocess.run([sz, obj], capture_output=True, text=True)
+        parts = r.stdout.splitlines()[1].split()
+        out[src] = int(parts[0]) + int(parts[1])      # text + data
+    return out
+
+
+def main_arm():
+    if not find_llvm_size():
+        print('SKIP: 找不到 llvm-size（需要 LLVM 工具链；macOS 自带 size 读不了 ELF）')
+        return 0
+    print(f'ARM/Thumb-2 目标代码体积（真交叉编译 -target {ARM_TARGET}）\n')
+    print(f'{"档位/配置":<26} {"text+data":>10}')
+    print('-' * 40)
+    rows = {}
+    for tier in TIERS:
+        for vname, vflags in VARIANTS.items():
+            m = arm_measure(tier, vflags.split() if vflags else [])
+            tot = sum(m.values())
+            rows[f'{tier}/{vname}'] = tot
+            print(f'{tier}/{vname:<26} {tot:>10}')
+    print('\n相对关系（同档位下各开关的增量）：')
+    for tier in TIERS:
+        base = rows[f'{tier}/default']
+        parts = [f'{v} {rows[f"{tier}/{v}"] - base:+d}'
+                 for v in VARIANTS if v != 'default']
+        print(f'  {tier:<9} base={base:>7}  ' + '  '.join(parts))
+    print('\n注意：这是**目标代码**体积，不含 libc 实现、启动代码、栈与 port 胶水。')
+    print('      它可信地回答「哪个开关贵、绝对量级多少」，但仍不是链接后的固件尺寸。')
+    return 0
+
+
 def main():
+    if '--arm' in sys.argv:
+        return main_arm()
     as_json = '--json' in sys.argv
     result = {}
     for tier in TIERS:

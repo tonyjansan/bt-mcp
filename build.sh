@@ -189,7 +189,10 @@ $CC $CFLAGS fuzz/fuzz_l5.c $CORE -o build/fuzz_l5
 ./build/fuzz_l5 300000
 
 # ────────────────────────────── §8 门禁 ──────────────────────────────
-echo "== §8 静态分析门禁（自测 + 基线） =="
+echo "== §8 代码体积（ARM/Thumb-2 真交叉编译；缺工具链时 SKIP） =="
+python3 tools/footprint.py --arm 2>&1 | head -6
+
+echo "== §8 静态分析门禁（自测 + 基线 + 严格告警矩阵） =="
 python3 tools/static_analysis.py
 
 echo "== §8 文档与代码一致性 =="
