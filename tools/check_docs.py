@@ -78,14 +78,32 @@ def check_numbers():
                 fails.append(f"{path}: 缺少基线数字 {p}")
 
 
+def read_version():
+    """从 VERSION 文件读当前版本（单一来源）。
+
+    为什么改成读文件：v0.9.1 之前这里是硬编码 `want = 'v0.6'`，
+    于是 v0.7/v0.8/v0.9 三个版本发布后，README 的 Status 一直停在 v0.6
+    而检查器仍然通过 —— **检查器自己过期了，反而掩盖了文档债**。
+    """
+    try:
+        with open('VERSION') as f:
+            v = f.read().strip()
+    except OSError:
+        return None
+    return 'v' + v if v else None
+
+
 def check_versions():
-    """三份主文档的版本号必须一致。"""
-    want = 'v0.6'
+    """主文档的版本号必须与 VERSION 一致。"""
+    want = read_version()
+    if not want:
+        fails.append('VERSION 文件缺失或为空（版本号单一来源）')
+        return
     checks = {
-        'README.md': r'## Status \(2026-\d\d-\d\d, (v\d\.\d)\)',
+        'README.md': r'## Status \(2026-\d\d-\d\d, (v\d+\.\d+(?:\.\d+)?)\)',
         'docs/bt-mcp-core-draft.md': r'# BT-MCP 实现说明',
         'docs/bt-mcp-protocol-spec.md': r'规范（normative）',
-        'docs/bt-mcp-interface-spec.html': r'<h1>BT-MCP (v\d\.\d) 外部接口规约</h1>',
+        'docs/bt-mcp-interface-spec.html': r'<h1>BT-MCP (v\d+\.\d+(?:\.\d+)?) 外部接口规约</h1>',
     }
     for path, pat in checks.items():
         if not os.path.exists(path):

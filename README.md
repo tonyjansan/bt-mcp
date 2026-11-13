@@ -4,18 +4,18 @@ Bluetooth-carried MCP (Model Context Protocol) stack — a platform-agnostic
 C99 protocol core that runs MCP over BLE GATT / Classic SPP / L2CAP CoC / any
 byte channel, with zero vendor ifdefs and zero OS dependencies.
 
-## Status (2026-11-11, v0.6)
+## Status (2026-11-13, v0.9.1)
 
 | Layer | Module | Notes |
 |---|---|---|
-| L3 | `core/src/frame.c` | 0xB7 分帧/重组；缺片登记 NACK；单次 emit/片；可选 FCS16；MTU 热更新 |
+| L3 | `core/src/frame.c` | 0xB7 分帧；**乱序缓存 + 缺片位图**重组（精确补片）；多缺片 NACK；单次 emit/片；可选 FCS16；MTU 热更新 |
 | L4 | `core/src/session.c` | 状态机 + 信用闭环 + 消息级 ACK/NACK/重传/去重 + RESUME 防爆破 + RTT + RTO 退避 |
-| L5 | `core/src/mcp_server.c` | 标准 MCP 握手、tools/resources/prompts、订阅、日志分级、富内容、`_meta`、双向请求、batch |
+| L5 | `core/src/mcp_server.c` | 标准 MCP 握手、tools/resources/prompts/**templates**、订阅、日志分级、富内容、`_meta`、双向请求、batch、**completion/complete** |
 | L5 | `core/src/mcp_client.c` | 主动握手、请求/响应 id 匹配、超时上抛 |
 | port | `port/bt_mcp/` | GATT（包/不可靠）、SPP（流/可靠）、L2CAP CoC（包/可靠/自带流控） |
-| 辅助 | `json.c` `writer.c` `err.c` `trace.c` | 零分配解析/写出、稳定错误串、可裁调试钩子 |
+| 辅助 | `json.c` `writer.c` `err.c` `trace.c` | 零分配解析/写出、稳定错误串、可裁调试钩子（TRACE=0 时真零代码） |
 
-**回归基线**（`./build.sh`，2026-11-11 实测）：
+**回归基线**（`./build.sh`，2026-11-13 实测）：
 
 | 套件 | 数量 |
 |---|---|
@@ -24,6 +24,7 @@ byte channel, with zero vendor ifdefs and zero OS dependencies.
 | 单元与定向 | **695** |
 | 表驱动矩阵断言 | **11469**（3141 生成用例） |
 | 官方 MCP TypeScript SDK 互验 | **38** |
+| 独立第二实现校验（Python 解析器） | 见 `tests/cross_impl_l3.py` |
 | golden transcript | **20** |
 
 覆盖率：行 **95%** / 分支 **68%**（门禁 95/68）。
@@ -47,7 +48,7 @@ ASan/UBSan 全绿，TSan 干净，fuzz 帧层 200 万轮 + FCS16 80 万轮零崩
 所有蓝牙行为（MTU 协商、notify 节流、断链语义）都还是**假设**，
 从未在真实协议栈上验证。这是里程碑的**唯一硬依赖**。
 
-## 规范覆盖（v0.6）
+## 规范覆盖（v0.9）
 
 | 能力 | 方法 |
 |---|---|

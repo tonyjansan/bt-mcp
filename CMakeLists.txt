@@ -11,7 +11,13 @@
 #   - 配置项全部通过 target_compile_definitions 暴露，宿主可覆盖
 #     （例如 BT_MCP_TIER、BT_MCP_CFG_FCS16），而不是让用户改头文件。
 cmake_minimum_required(VERSION 3.16)
-project(bt_mcp VERSION 0.8.0 LANGUAGES C)
+# 版本号单一来源：读 VERSION 文件（tools/check_docs.py 也读它）
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" BT_MCP_VERSION_RAW)
+string(STRIP "${BT_MCP_VERSION_RAW}" BT_MCP_VERSION)
+if(NOT BT_MCP_VERSION)
+    message(FATAL_ERROR "VERSION 文件缺失或为空")
+endif()
+project(bt_mcp VERSION ${BT_MCP_VERSION} LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
