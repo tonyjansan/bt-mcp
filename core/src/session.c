@@ -270,28 +270,29 @@ static int rx_ctrl(bt_mcp_session_t *s, const uint8_t *pl, uint16_t len)
         return BT_MCP_OK;
     }
     case BT_MCP_CTRL_NACK: {
+        /* v0.9.1：载荷 type|seq|count|idx[count]。
+         * 兼容旧格式：len==3 时视为 count=1、idx=pl[2]（老对端只报一个缺片）。 */
         if (len < 3) return BT_MCP_E_SYNC;
         struct bt_mcp_tx_slot *sl = slot_by_seq(s, pl[1]);
         if (!sl || !s->fr || !s->emit) return BT_MCP_OK;   /* 无槽可补：交给对端超时 */
         const uint8_t *src = sl->ref ? sl->ref : sl->buf;
-        /* v0.7（A2）：**尾部重放**而不是只补一片。
-         * 接收侧严格按序重组，缺口之后已发出的分片都白丢了；只补 idx 这一片，
-         * 下一轮又会发现新的缺口 → 12 片的消息要 12 轮才能补齐，而
-         * retry_max 早就耗尽了（小 MTU 下交付率仅 ~23%）。
-         * 从 idx 补到末尾，一轮补齐所有现存缺口。
-         * 上限 BT_MCP_CFG_NACK_REPLAY_MAX：防止一次 NACK 触发过长突发（拥塞）。 */
-        uint8_t idx = pl[2];
-        uint8_t nfrag = bt_mcp_framer_frag_count(s->fr, sl->len);
-        /* 预算：累计重放片数不超过 分片数 × BUDGET_X，防止无效重放风暴 */
-        uint16_t budget = (uint16_t)nfrag * BT_MCP_CFG_NACK_REPLAY_BUDGET_X;
+        if (len == 3) {
+            /* 旧格式（单缺片） */
+            int rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq,
+                                            pl[2], src, sl->len, s->emit, s->io);
+            if (!rc) s->stat_tx_retransmit++;
+            return rc;
+        }
+        /* 新格式：只为**真正缺的片**重发，不再「补到末尾」 */
+        uint8_t cnt = pl[2];
+        if ((uint32_t)cnt + 3 > len || cnt == 0) return BT_MCP_E_SYNC;
+        uint16_t budget = (uint16_t)cnt;
         if (sl->nack_replay >= budget) return BT_MCP_OK;
-        uint8_t burst = 0;
         int rc = 0;
-        for (uint8_t i = idx; i < nfrag && burst < BT_MCP_CFG_NACK_REPLAY_MAX; i++) {
-            rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq, i,
-                                        src, sl->len, s->emit, s->io);
+        for (uint8_t i = 0; i < cnt; i++) {
+            rc = bt_mcp_framer_send_idx(s->fr, BT_MCP_KIND_MCP, sl->seq,
+                                        pl[3 + i], src, sl->len, s->emit, s->io);
             if (rc) break;
-            burst++;
             sl->nack_replay++;
             s->stat_tx_retransmit++;
         }
@@ -490,12 +491,23 @@ int bt_mcp_session_pump(bt_mcp_session_t *s)
 {
     if (!s || !s->fr) return BT_MCP_E_ARGS;
     int rc = BT_MCP_OK;
-    uint8_t seq, idx;
     /* 1) 缺片 → NACK 请对端补发（仅不可靠包通道） */
-    if (chan_unreliable(s) && bt_mcp_framer_take_nack(s->fr, &seq, &idx)) {
-        uint8_t args[2] = { seq, idx };
-        int r = ctrl_frame(s, BT_MCP_CTRL_NACK, args, 2);
-        if (r) rc = r;
+    if (chan_unreliable(s)) {
+        uint8_t nseq = 0, cnt = 0;
+        uint8_t idxs[BT_MCP_CFG_NACK_MAX_IDX];
+        int got = bt_mcp_framer_take_nack(s->fr, &nseq, idxs,
+                                          (uint8_t)BT_MCP_CFG_NACK_MAX_IDX, &cnt);
+        if (got > 0) {
+            /* v0.9.1：NACK 载荷 = type | seq | count | idx[count]。
+             * count==1 时与旧格式（type|seq|idx）**字节完全一致**，
+             * 因此老对端仍能正确处理「单缺片」情形。 */
+            uint8_t args[2 + BT_MCP_CFG_NACK_MAX_IDX];
+            args[0] = nseq;
+            args[1] = cnt;
+            memcpy(args + 2, idxs, cnt);
+            int r = ctrl_frame(s, BT_MCP_CTRL_NACK, args, (uint8_t)(2 + cnt));
+            if (r) rc = r;
+        }
     }
     /* 2) ACK 超时 → 整条重传（用原 seq，接收侧按指纹去重） */
     for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++) {

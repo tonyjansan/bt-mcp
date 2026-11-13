@@ -66,6 +66,12 @@
  * 必须 ≥ 一条消息的典型分片数，否则一轮补不齐、要多轮才能收敛。
  * 实测（MTU 23 / 200B = 12 片 / 20% 丢包）：8 片 → 交付 23%，
  * 16 片 → 57%（一次覆盖全部分片）。取 16。 */
+/* v0.9.1（A2 根因修复）：一次 NACK 最多报几个缺片。
+ * 位图让接收侧能精确知道缺哪些，于是只需补这些——不再「补到尾」。
+ * 上限同时决定控制帧大小（1 + 1 + 1 + N ≤ 255，N ≤ 252）。 */
+#ifndef BT_MCP_CFG_NACK_MAX_IDX
+#define BT_MCP_CFG_NACK_MAX_IDX   16
+#endif
 #ifndef BT_MCP_CFG_NACK_REPLAY_MAX
 #define BT_MCP_CFG_NACK_REPLAY_MAX  16
 #endif

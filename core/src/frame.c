@@ -55,7 +55,19 @@ int bt_mcp_framer_set_mtu(bt_mcp_framer_t *f, uint16_t mtu)
     if (!f || !f->cap) return BT_MCP_E_ARGS;
     if (f->cap->kind == BT_MCP_CHAN_STREAM) return BT_MCP_E_ARGS;  /* 流通道无 MTU 概念 */
     if (mtu && mtu <= BT_MCP_HDR_LEN) return BT_MCP_E_ARGS;
+    uint16_t old = chunk_cap(f->cap, f->mtu_override);
     f->mtu_override = mtu;      /* 0 = 回退 cap->mtu */
+    /* v0.9.1（位图重组的必要约束）：MTU 变化会改变分片边界，**在途重组**
+     * 的分片偏移随之失效（已经收到的片落在旧边界上，后续片落在新边界上，
+     * 拼出来的是垃圾）。这类消息本来就无法正确完成，直接弃掉在途槽——
+     * 由上层的消息级重传重新发一遍（重新发的片会用新 MTU 一致切片）。
+     * 严格按序拼接的旧实现没有这个问题（它不按偏移落位），但代价是必须
+     * 只补「缺的那一片」而不能乱序缓存；两者不可兼得，这里选正确的那个。 */
+    if (chunk_cap(f->cap, f->mtu_override) != old) {
+        memset(f->reasm, 0, sizeof(f->reasm));
+        f->dead_valid = 0;
+        f->nack_pending = 0;
+    }
     return BT_MCP_OK;
 }
 
@@ -68,6 +80,8 @@ void bt_mcp_framer_reset(bt_mcp_framer_t *f)
     f->s_active = 0;
     f->s_fcs_got = 0;
     f->nack_pending = 0;
+    f->dead_valid = 0;
+    f->dead_seq = 0;
 }
 
 #if BT_MCP_CFG_FCS16
@@ -252,39 +266,120 @@ static int feed_packet(bt_mcp_framer_t *f, const uint8_t *frag, uint16_t len,
         return BT_MCP_OK;
     }
 
+    /* 已放弃的消息：同 seq 的后续分片直接忽略（换 seq 后自然解除） */
+    if (f->dead_valid && f->dead_seq == seq) return BT_MCP_OK;
+
     struct bt_mcp_reasm_slot *s = slot_for(f, seq);
     if (!s) return BT_MCP_E_NOMEM;                /* 窗口满：丢弃，信用层背压 */
 
-    if (s->len_total == 0 && s->next_idx == 0) {  /* 新槽首片：记录元数据 */
+    /* v0.9.1（A2 根因修复）：乱序缓存。
+     *
+     * 所有**非末尾片**的载荷长度都等于 chunk（见 emit_chunk），所以
+     * 片 i 的字节偏移可以直接算成 i*chunk，不需要记录每片长度。
+     * 收到就落位并置位图；只有位图里真正缺的片才进 NACK。
+     * 这样发送端只补缺的，不再「从缺片补到末尾」（v0.8 的做法会把已到达
+     * 的片重发一遍，实测约 19 倍带宽放大）。 */
+    if (!s->in_use || (s->len_total == 0 && !s->have_last && s->got[0] == 0
+                       && s->chunk == 0)) {
+        /* 新槽首片：记录元数据并清位图 */
         s->ctrl = (uint8_t)ctrl;
         s->t_first = f->now_ms;
+        memset(s->got, 0, sizeof s->got);
+        s->have_last = 0;
+        s->last_len = 0;
+        s->len_total = 0;
+        s->gap_wait = 0;
+        s->nack_len = 0;
+        /* **偏移基准 = 分片边界**。推导顺序：
+         *  1) 非 LAST 片的长度**恒等于** chunk（发送侧就是这么切的）→ 最权威；
+         *  2) 若本片是 LAST（长度更短），退回用本地 MTU 推导的 chunk_cap()；
+         *  3) 若 chunk_cap() 也不可用（MTU 未配置），暂记 0 = 未知。
+         * 注意不能「用片长当基准后又被更长的片修正」：那会让先前落的片
+         * 偏移全错（实测表现为重复投递，test_lossy 抓到过）。 */
+        uint16_t cc = (flags & BT_MCP_FLAG_LAST) ? 0 : plen;
+        if (!cc) cc = chunk_cap(f->cap, f->mtu_override);
+        s->chunk = cc;          /* 0 = 未知 */
     }
-    if (idx != s->next_idx) {
-        if (idx < s->next_idx) return BT_MCP_OK;  /* 迟到重复片：静默忽略 */
-        /* 缺片（判例 #2）：保持槽存活，登记 NACK 请对端补发 next_idx 片 */
-        if (++s->gap_wait > BT_MCP_GAP_WAIT_MAX) {
-            s->in_use = 0;                        /* 补不齐（对端失联）→ 弃槽 */
-            return BT_MCP_E_SYNC;
-        }
-        if (!f->nack_pending) {
-            f->nack_pending = 1;
-            f->nack_seq = seq;
-            f->nack_idx = s->next_idx;
-        }
+
+    if (!s->chunk) {
+        /* 基准未知（只收到了 LAST 片，或 MTU 未配置）：本片无法定位。
+         * 丢弃并不置位图 → 缺口仍在 → ARQ 会重发，届时基准已知。 */
         return BT_MCP_OK;
     }
-    if ((uint32_t)s->len_total + plen > BT_MCP_CFG_MAX_MSG) {
+    uint32_t off = (uint32_t)idx * s->chunk;
+    if (off + plen > BT_MCP_CFG_MAX_MSG) {
         s->in_use = 0;
         return BT_MCP_E_TOOBIG;
     }
-    memcpy(s->buf + s->len_total, pl, plen);
-    s->len_total = (uint16_t)(s->len_total + plen);
-    s->next_idx++;
-    s->t_last = f->now_ms;
 
+    uint8_t bit = (uint8_t)(1u << (idx & 7u));
+    int already = (s->got[idx >> 3] & bit) != 0;
+    if (!already) {
+        memcpy(s->buf + off, pl, plen);
+        s->got[idx >> 3] = (uint8_t)(s->got[idx >> 3] | bit);
+        s->len_total = (uint16_t)(s->len_total + plen);
+        s->t_last = f->now_ms;
+    } else {
+        s->t_last = f->now_ms;      /* 重复片：只刷新活跃时间 */
+        /* 无进展的重发也计入缺失等待：否则「对端反复重发同一片」
+         * 这种真·失联场景永远不会弃槽（且不依赖 pump 是否被调用）。 */
+        if (++s->gap_wait > BT_MCP_GAP_WAIT_MAX) {
+            s->in_use = 0;
+            f->dead_valid = 1;
+            f->dead_seq = seq;
+            return BT_MCP_E_SYNC;
+        }
+    }
+    f->dead_valid = 0;          /* 有分片成功落位 → 解除放弃标记 */
     if (flags & BT_MCP_FLAG_LAST) {
+        s->have_last = 1;
+        s->last_idx = idx;
+        s->last_len = plen;
+    }
+
+    /* 缺片统计：从 0 扫到 max(已见最高 idx, last_idx) */
+    uint8_t hi = idx;
+    if (s->have_last && s->last_idx > hi) hi = s->last_idx;
+    uint8_t missing[BT_MCP_CFG_NACK_MAX_IDX];
+    uint8_t nmiss = 0;
+    uint32_t n_missing_total = 0;
+    for (uint8_t i = 0; i <= hi; i++) {
+        if (s->got[i >> 3] & (uint8_t)(1u << (i & 7u))) continue;
+        n_missing_total++;
+        if (nmiss < BT_MCP_CFG_NACK_MAX_IDX) missing[nmiss++] = i;
+    }
+
+    if (n_missing_total) {
+        /* 有缺口：登记 NACK（一次报多个）。
+         * gap_wait 的语义是「连续多少轮 NACK **没有任何进展**」——
+         * 不能按「收到带缺口的片」计数：乱序到达时缺口是常态，
+         * 那样会把还在正常推进的消息误判为对端失联（实测交付率 34→16）。 */
+        if (!f->nack_pending) {
+            if (s->len_total == s->nack_len) {
+                if (++s->gap_wait > BT_MCP_GAP_WAIT_MAX) {
+                    s->in_use = 0;                /* 真补不齐 → 弃槽 */
+                    f->dead_valid = 1;
+                    f->dead_seq = seq;
+                    return BT_MCP_E_SYNC;
+                }
+            } else {
+                s->gap_wait = 0;                  /* 有进展：重置 */
+                s->nack_len = s->len_total;
+            }
+            f->nack_pending = 1;
+            f->nack_seq = seq;
+            f->nack_count = nmiss;
+            memcpy(f->nack_idx, missing, nmiss);
+        }
+        return BT_MCP_OK;
+    }
+
+    /* 无缺口且已收到 LAST → 完整 */
+    if (s->have_last) {
+        uint32_t total = (uint32_t)s->last_idx * s->chunk + s->last_len;
+        if (total > BT_MCP_CFG_MAX_MSG) { s->in_use = 0; return BT_MCP_E_TOOBIG; }
         sink(user, s->ctrl ? BT_MCP_KIND_CTRL : BT_MCP_KIND_MCP,
-             seq, s->buf, s->len_total);
+             seq, s->buf, (uint16_t)total);
         s->in_use = 0;
     }
     return BT_MCP_OK;
@@ -376,13 +471,21 @@ int bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
     return feed_stream(f, in, len, sink, user);
 }
 
-int bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq, uint8_t *idx)
+int bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq,
+                            uint8_t *idx, uint8_t max, uint8_t *count_out)
 {
-    if (!f || !f->nack_pending) return 0;
+    if (!f || !f->nack_pending) {
+        if (count_out) *count_out = 0;
+        return 0;
+    }
+    uint8_t n = f->nack_count;
+    if (n > max) n = max;
     if (seq) *seq = f->nack_seq;
-    if (idx) *idx = f->nack_idx;
+    if (idx && n) memcpy(idx, f->nack_idx, n);
+    if (count_out) *count_out = n;
     f->nack_pending = 0;
-    return 1;
+    f->nack_count = 0;
+    return n;
 }
 
 void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms)

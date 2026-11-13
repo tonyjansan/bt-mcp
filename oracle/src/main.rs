@@ -35,6 +35,8 @@ const FLAG_LAST: u8 = 0x01;
 const FLAG_CHUNK: u8 = 0x02;
 const FLAG_CTRL: u8 = 0x04;
 const MAX_FRAG: usize = 255;  /* == BT_MCP_CFG_MAX_FRAG（u8 idx 上限） */
+/* v0.9.1：一次 NACK 最多报几个缺片（== BT_MCP_CFG_NACK_MAX_IDX） */
+const NACK_MAX_IDX: usize = 16;
 const MAX_MSG: usize = 8192;
 
 const E_AGAIN: i32 = -1;
@@ -136,7 +138,9 @@ fn encode(kind: u32, mtu: u16, payload: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-struct DecSlot { in_use: bool, msg_seq: u8, next_idx: u8, gap_wait: u8, buf: Vec<u8> }
+struct DecSlot { in_use: bool, msg_seq: u8, gap_wait: u8,
+                 chunk: u16, len_total: u16, last_len: u16, last_idx: u8,
+                 have_last: bool, got: [u8; (MAX_FRAG + 7) / 8], buf: Vec<u8> }
 
 fn decode_packet(input: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
     let mut msgs = Vec::new();
@@ -168,23 +172,49 @@ fn decode_packet(input: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
             Some(p) => p,
             None => {
                 if slots.len() >= max_reasm() { continue; }
-                slots.push(DecSlot { in_use: true, msg_seq: seq, next_idx: 0,
-                                     gap_wait: 0, buf: Vec::new() });
+                slots.push(DecSlot { in_use: true, msg_seq: seq, gap_wait: 0,
+                                     chunk: 0, len_total: 0, last_len: 0,
+                                     last_idx: 0, have_last: false,
+                                     got: [0u8; (MAX_FRAG + 7) / 8],
+                                     buf: Vec::new() });
                 slots.len() - 1
             }
         };
         let s = &mut slots[pos];
-        if idx != s.next_idx {
-            if idx < s.next_idx { continue; }
-            s.gap_wait += 1;
-            if s.gap_wait > GAP_WAIT_MAX { s.in_use = false; return None; }
-            continue;
+        /* v0.9.1（与 C 同）：乱序缓存 + 位图。解码侧无法知道发送方 MTU，
+         * 因此基准从分片自身推导：非 LAST 片长度恒等于 chunk。 */
+        if !s.in_use || (s.len_total == 0 && !s.have_last && s.chunk == 0
+                         && s.got[0] == 0) {
+            s.got = [0u8; (MAX_FRAG + 7) / 8];
+            s.have_last = false; s.last_len = 0; s.last_idx = 0;
+            s.len_total = 0;
+            let cc = if flags & FLAG_LAST == 0 { plen as u16 } else { 0 };
+            s.chunk = cc;                       /* 0 = 未知 */
         }
-        if s.buf.len() + plen > MAX_MSG { s.in_use = false; return None; }
-        s.buf.extend_from_slice(pl);
-        s.next_idx += 1;
+        if s.chunk == 0 { continue; }            /* 基准未知：等下一片 */
+        let chunk = s.chunk as usize;
+        let off = (idx as usize).saturating_mul(chunk);
+        if off + plen > MAX_MSG { s.in_use = false; return None; }
+        let bit = 1u8 << (idx & 7);
+        let already = (s.got[(idx >> 3) as usize] & bit) != 0;
+        if !already {
+            s.buf.resize(MAX_MSG, 0);
+            s.buf[off..off + plen].copy_from_slice(pl);
+            s.got[(idx >> 3) as usize] |= bit;
+            s.len_total = s.len_total.wrapping_add(plen as u16);
+        }
         if flags & FLAG_LAST != 0 {
-            let msg = std::mem::take(&mut s.buf);
+            s.have_last = true; s.last_idx = idx; s.last_len = plen as u16;
+        }
+        let mut hi = idx;
+        if s.have_last && s.last_idx > hi { hi = s.last_idx; }
+        let mut complete = true;
+        for i in 0..=hi {
+            if (s.got[(i >> 3) as usize] & (1u8 << (i & 7))) == 0 { complete = false; break; }
+        }
+        if complete && s.have_last {
+            let total = (s.last_idx as usize) * chunk + s.last_len as usize;
+            let msg = s.buf[..total].to_vec();
             let k = ctrl as u8;
             s.in_use = false;
             msgs.push((k, msg));
@@ -227,8 +257,12 @@ enum RxPre { Rc(i32), Deliver }
 
 #[derive(Clone)]
 struct SSlot {
-    in_use: bool, ctrl: bool, msg_seq: u8, next_idx: u8, gap_wait: u8,
-    len_total: u16, t_first: u32, t_last: u32, buf: Vec<u8>,
+    /* v0.9.1（A2 根因修复，与 C 同）：乱序缓存 + 缺片位图。
+     * 偏移 = idx * chunk（非末尾片长度恒为 chunk）。 */
+    in_use: bool, ctrl: bool, msg_seq: u8, gap_wait: u8,
+    chunk: u16, len_total: u16, last_len: u16, last_idx: u8, have_last: bool,
+    nack_len: u16, t_first: u32, t_last: u32,
+    got: [u8; (MAX_FRAG + 7) / 8], buf: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -245,7 +279,9 @@ struct Sess {
     reliable: bool, flow_ctrl: bool,
     /* L3 */
     tx_seq: u8, fnow: u32,
-    nack_pending: bool, nack_seq: u8, nack_idx: u8,
+    nack_pending: bool, nack_seq: u8,
+    nack_idx: [u8; NACK_MAX_IDX], nack_count: u8,
+    dead_seq: u8, dead_valid: bool,
     slots: Vec<SSlot>,
     s_hdr: [u8; 6], s_hdr_got: usize, s_len_got: u16,
     s_fcs: [u8; 2], s_fcs_got: usize,
@@ -277,10 +313,13 @@ impl Sess {
                流通道有序可靠且自带流控 */
             reliable: !packet, flow_ctrl: !packet,
             tx_seq: 0, fnow: 0,
-            nack_pending: false, nack_seq: 0, nack_idx: 0,
+            nack_pending: false, nack_seq: 0, nack_idx: [0; NACK_MAX_IDX], nack_count: 0,
+            dead_seq: 0, dead_valid: false,
             slots: (0..max_reasm()).map(|_| SSlot {
-                in_use: false, ctrl: false, msg_seq: 0, next_idx: 0, gap_wait: 0,
-                len_total: 0, t_first: 0, t_last: 0, buf: vec![0; MAX_MSG],
+                in_use: false, ctrl: false, msg_seq: 0, gap_wait: 0, chunk: 0,
+                len_total: 0, last_len: 0, last_idx: 0, have_last: false,
+                nack_len: 0, got: [0u8; (MAX_FRAG + 7) / 8],
+                t_first: 0, t_last: 0, buf: vec![0; MAX_MSG],
             }).collect(),
             s_hdr: [0; 6], s_hdr_got: 0, s_len_got: 0,
             s_fcs: [0; 2], s_fcs_got: 0,
@@ -419,68 +458,114 @@ impl Sess {
             msgs.push((if ctrl { K_CTRL } else { K_MCP }, seq, pl.to_vec()));
             return 0;
         }
+        if self.dead_valid && self.dead_seq == seq { return 0; }
         let pos = match self.slots.iter().position(|s| s.in_use && s.msg_seq == seq) {
             Some(p) => p,
             None => match self.slots.iter().position(|s| !s.in_use) {
                 Some(p) => {
                     let s = &mut self.slots[p];
                     s.in_use = true; s.ctrl = false; s.msg_seq = seq;
-                    s.next_idx = 0; s.gap_wait = 0; s.len_total = 0;
+                    s.gap_wait = 0; s.chunk = 0; s.len_total = 0;
+                    s.have_last = false; s.last_len = 0; s.nack_len = 0;
+                    s.got = [0u8; (MAX_FRAG + 7) / 8];
                     s.t_first = 0; s.t_last = 0;
                     p
                 }
                 None => return E_NOMEM,
             },
         };
-        let mut want_nack: Option<(u8, u8)> = None;
         {
-            let s = &mut self.slots[pos];
-            if s.len_total == 0 && s.next_idx == 0 {
+            let frag_chunk = self.chunk();
+        let s = &mut self.slots[pos];
+            /* v0.9.1（A2 根因修复，与 C 逐分支同）：乱序缓存 + 位图 */
+            if s.len_total == 0 && !s.have_last && s.chunk == 0 && s.got[0] == 0 {
                 s.ctrl = ctrl;
                 s.t_first = self.fnow;
+                s.got = [0u8; (MAX_FRAG + 7) / 8];
+                s.have_last = false;
+                s.last_len = 0;
+                s.len_total = 0;
+                s.gap_wait = 0;
+                s.nack_len = 0;
+                /* 与 C 同：非 LAST 片长度恒等于 chunk（最权威）；
+                 * LAST 片较短，退回 MTU 推导值；都没有则记 0 = 未知。 */
+                let cc = if flags & FLAG_LAST == 0 { plen as u16 } else { 0 };
+                let cc = if cc == 0 { frag_chunk as u16 } else { cc };
+                s.chunk = cc;
             }
-            if idx != s.next_idx {
-                if idx < s.next_idx { return 0; }
-                s.gap_wait += 1;
-                if s.gap_wait > GAP_WAIT_MAX {
-                    s.in_use = false;
-                    return E_SYNC;
-                }
-                want_nack = Some((seq, s.next_idx));
-                if s.gap_wait > 0 && !self.nack_pending { /* 占位，稍后设置 */ }
-            } else {
-                if s.len_total as usize + plen > MAX_MSG {
-                    s.in_use = false;
-                    return E_TOOBIG;
-                }
-                s.buf[s.len_total as usize..s.len_total as usize + plen]
-                    .copy_from_slice(pl);
-                s.len_total += plen as u16;
-                s.next_idx += 1;
+            if s.chunk == 0 { return 0; }   /* 基准未知：丢弃，等 ARQ 重发 */
+            let chunk = s.chunk as usize;
+            let off = (idx as usize).saturating_mul(chunk);
+            if off + plen > MAX_MSG {
+                s.in_use = false;
+                return E_TOOBIG;
+            }
+            let bit = 1u8 << (idx & 7);
+            let already = (s.got[(idx >> 3) as usize] & bit) != 0;
+            if !already {
+                s.buf.resize(MAX_MSG, 0);
+                s.buf[off..off + plen].copy_from_slice(pl);
+                s.got[(idx >> 3) as usize] |= bit;
+                s.len_total = s.len_total.wrapping_add(plen as u16);
                 s.t_last = self.fnow;
-                if flags & FLAG_LAST != 0 {
-                    let msg = s.buf[..s.len_total as usize].to_vec();
-                    let k = if s.ctrl { K_CTRL } else { K_MCP };
-                    s.in_use = false;
-                    s.gap_wait = 0;
-                    msgs.push((k, seq, msg));
-                }
+            } else {
+                s.t_last = self.fnow;
             }
-        }
-        if let Some((nseq, nidx)) = want_nack {
-            if !self.nack_pending {
-                self.nack_pending = true;
-                self.nack_seq = nseq;
-                self.nack_idx = nidx;
+            self.dead_valid = false;
+            if flags & FLAG_LAST != 0 {
+                s.have_last = true;
+                s.last_idx = idx;
+                s.last_len = plen as u16;
+            }
+            /* 缺片统计 */
+            let mut hi = idx;
+            if s.have_last && s.last_idx > hi { hi = s.last_idx; }
+            let mut missing: [u8; NACK_MAX_IDX] = [0; NACK_MAX_IDX];
+            let mut nmiss = 0usize;
+            let mut total_missing = 0usize;
+            for i in 0..=hi {
+                if (s.got[(i >> 3) as usize] & (1u8 << (i & 7))) != 0 { continue; }
+                total_missing += 1;
+                if nmiss < NACK_MAX_IDX { missing[nmiss] = i; nmiss += 1; }
+            }
+            let len_total = s.len_total;
+            if total_missing > 0 {
+                if !self.nack_pending {
+                    /* gap_wait = 连续无进展的 NACK 轮数（与 C 同语义） */
+                    if len_total == s.nack_len {
+                        s.gap_wait += 1;
+                        if s.gap_wait > GAP_WAIT_MAX {
+                            s.in_use = false;
+                            self.dead_valid = true;
+                            self.dead_seq = seq;
+                            return E_SYNC;
+                        }
+                    } else {
+                        s.gap_wait = 0;
+                        s.nack_len = len_total;
+                    }
+                    self.nack_pending = true;
+                    self.nack_seq = seq;
+                    self.nack_count = nmiss as u8;
+                    self.nack_idx = missing;
+                }
+            } else if s.have_last {
+                let total = (s.last_idx as usize) * chunk + s.last_len as usize;
+                let msg = s.buf[..total].to_vec();
+                let k = if s.ctrl { K_CTRL } else { K_MCP };
+                s.in_use = false;
+                s.gap_wait = 0;
+                msgs.push((k, seq, msg));
             }
         }
         0
     }
 
-    fn take_nack(&mut self) -> Option<(u8, u8)> {
+    fn take_nack(&mut self) -> Option<(u8, Vec<u8>)> {
         if !self.nack_pending { return None; }
         self.nack_pending = false;
-        Some((self.nack_seq, self.nack_idx))
+        let n = self.nack_count as usize;
+        Some((self.nack_seq, self.nack_idx[..n].to_vec()))
     }
 
     fn feed_stream(&mut self, data: &[u8], msgs: &mut Vec<(u8, u8, Vec<u8>)>) -> i32 {
@@ -692,20 +777,22 @@ impl Sess {
                 if pl.len() < 3 { return E_SYNC; }
                 let Some(p) = self.slot_by_seq(pl[1]) else { return 0; };
                 let (seq, buf) = (self.txslot[p].seq, self.txslot[p].buf.clone());
-                /* v0.7（A2，与 C 同）：尾部重放而不是只补一片 */
-                let nfrag = self.frag_count(buf.len());
-                let budget = nfrag as u16 * NACK_REPLAY_BUDGET_X;
-                if self.txslot[p].nack_replay >= budget { return 0; }
+                /* v0.9.1（与 C 同）：只为真正缺的片重发，不再「补到末尾」。
+                 * 旧格式 len==3 → count=1（兼容老对端）。 */
+                if pl.len() == 3 {
+                    let rc = self.frame_idx(K_MCP, seq, pl[2], &buf);
+                    if rc == 0 { self.stat_tx_retransmit += 1; }
+                    return rc;
+                }
+                let cnt = pl[2] as usize;
+                if cnt == 0 || cnt + 3 > pl.len() { return E_SYNC; }
+                if self.txslot[p].nack_replay as usize >= cnt { return 0; }
                 let mut rc = 0;
-                let mut burst = 0u8;
-                let mut i = pl[2];
-                while i < nfrag && burst < NACK_REPLAY_MAX {
-                    rc = self.frame_idx(K_MCP, seq, i, &buf);
+                for i in 0..cnt {
+                    rc = self.frame_idx(K_MCP, seq, pl[3 + i], &buf);
                     if rc != 0 { break; }
-                    burst += 1;
                     self.txslot[p].nack_replay += 1;
                     self.stat_tx_retransmit += 1;
-                    i += 1;
                 }
                 rc
             }
@@ -845,8 +932,13 @@ impl Sess {
     fn pump(&mut self) -> i32 {
         let mut rc = 0;
         if self.unreliable() {
-            if let Some((seq, idx)) = self.take_nack() {
-                let r = self.ctrl_frame(C_NACK, &[seq, idx]);
+            if let Some((seq, idxs)) = self.take_nack() {
+                /* v0.9.1：type|seq|count|idx[count]；count==1 与旧格式字节等价 */
+                let mut args = Vec::with_capacity(2 + idxs.len());
+                args.push(seq);
+                args.push(idxs.len() as u8);
+                args.extend_from_slice(&idxs);
+                let r = self.ctrl_frame(C_NACK, &args);
                 if r != 0 { rc = r; }
             }
         }
@@ -990,7 +1082,21 @@ fn run_session(input: &[u8], out: &mut impl Write) -> Result<(), i32> {
                 if off + 2 > input.len() { return Err(2); }
                 let m = u16::from_le_bytes(input[off..off + 2].try_into().unwrap());
                 off += 2;
-                rc = if s.packet { s.mtu_cur = m; 0 } else { E_ARGS };
+                if s.packet {
+                    let old = s.chunk();
+                    s.mtu_cur = m;
+                    /* 与 C 同：MTU 变了 → 在途重组槽的偏移失效，弃掉 */
+                    if s.chunk() != old {
+                        for sl in s.slots.iter_mut() {
+                            sl.in_use = false;
+                            sl.got = [0u8; (MAX_FRAG + 7) / 8];
+                            sl.chunk = 0; sl.len_total = 0; sl.have_last = false;
+                        }
+                        s.dead_valid = false;
+                        s.nack_pending = false;
+                    }
+                    rc = 0;
+                } else { rc = E_ARGS; }
             }
             _ => return Err(2),
         }

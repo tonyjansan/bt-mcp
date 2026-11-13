@@ -140,10 +140,13 @@ int main(void)
         feed_frag(0);
         feed_frag(2);                       /* 跳过第 1 片 */
         CHECK(g_msgs == 0, "gap → no message yet");
-        uint8_t nseq, nidx;
-        CHECK(bt_mcp_framer_take_nack(&fr_rx, &nseq, &nidx) == 1,
+        /* v0.9.1：take_nack 现在返回缺片个数并可一次报多片 */
+        uint8_t nseq = 0, nidx[BT_MCP_CFG_NACK_MAX_IDX], ncnt = 0;
+        CHECK(bt_mcp_framer_take_nack(&fr_rx, &nseq, nidx,
+                                      (uint8_t)BT_MCP_CFG_NACK_MAX_IDX,
+                                      &ncnt) >= 1,
               "NACK registered for missing chunk");
-        CHECK(nidx == 1, "NACK points at missing index 1");
+        CHECK(ncnt >= 1 && nidx[0] == 1, "NACK points at missing index 1");
         feed_frag(1);                       /* 补发 */
         feed_frag(2);                       /* 重发末片 */
         CHECK(g_msgs == 1, "filled gap → message delivered");

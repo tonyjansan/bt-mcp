@@ -48,15 +48,31 @@ typedef struct {
     uint16_t frag_tout_ms;   /* 重组超时，0 = 用 BT_MCP_CFG_FRAG_TOUT_MS */
 } bt_mcp_frame_cfg_t;
 
+/* v0.9.1（A2 根因修复）：**乱序缓存 + 缺片位图**。
+ *
+ * v0.8 的实现是严格按序：idx 跳号就丢弃该片、只 NACK 一个 next_idx，
+ * 于是发送端只能「从缺片补到末尾」——把已经到达的片又发一遍。
+ * 实测 60 条消息产生了 9045 次重传（约 19 倍带宽放大）。
+ *
+ * 现在改为：乱序片按 `idx * chunk` 落位并置位图；只有真正缺的片会被 NACK。
+ * 所有非末尾片的长度都等于 chunk，所以偏移可以直接算，不必记录每片长度。
+ */
 struct bt_mcp_reasm_slot {
     uint8_t  in_use;
     uint8_t  ctrl;         /* 1 = 控制帧消息 */
     uint8_t  msg_seq;      /* 消息键：同消息全部分片共享的帧头 seq */
-    uint8_t  next_idx;     /* 下一个期望分片号（严格递增，判例 #2） */
+    uint8_t  next_idx;     /* 兼容字段：当前最小的未收到分片号（供旧路径阅读） */
     uint8_t  gap_wait;     /* 缺片等待次数（防对端彻底丢帧后槽位长期占用） */
-    uint16_t len_total;    /* 已重组字节数 */
+    uint16_t chunk;        /* 本槽当前的分片载荷大小（偏移计算用） */
+    uint16_t len_total;    /* 已收到字节数累计 */
+    uint16_t last_len;     /* LAST 片的载荷长度（0 = 尚未收到 LAST） */
+    uint16_t nack_len;     /* 上次发 NACK 时的 len_total（判定「有无进展」） */
+    uint8_t  last_idx;     /* LAST 片的下标 */
+    uint8_t  have_last;    /* 1 = 已收到 LAST */
     uint32_t t_first;      /* 槽位开通时刻（超时回收基准） */
     uint32_t t_last;
+    /* 位图：bit i = 已收到分片 i（最多 BT_MCP_CFG_MAX_FRAG=255 片 → 32B） */
+    uint8_t  got[(BT_MCP_CFG_MAX_FRAG + 7) / 8];
     uint8_t  buf[BT_MCP_CFG_MAX_MSG];
 };
 
@@ -69,8 +85,14 @@ struct bt_mcp_framer {
     /* 待发 NACK（缺片登记；L4 经 take_nack 取走后发控制帧） */
     uint8_t  nack_pending;
     uint8_t  nack_seq;
-    uint8_t  nack_idx;
+    uint8_t  nack_idx[BT_MCP_CFG_NACK_MAX_IDX];  /* v0.9.1：一次报多个缺片 */
+    uint8_t  nack_count;
     struct bt_mcp_reasm_slot reasm[BT_MCP_CFG_MAX_REASM];
+    /* v0.9.1：刚被放弃的消息 seq。同一 seq 的后续分片一律忽略，
+     * 直到出现别的 seq —— 否则「对端反复重发同一片」会让同一条消息
+     * 无限「放弃→重建」，既浪费又永远释放不掉槽。 */
+    uint8_t  dead_seq;
+    uint8_t  dead_valid;
     /* 流通道解析器状态 */
     uint8_t  s_hdr[BT_MCP_HDR_LEN];
     uint8_t  s_hdr_got;
@@ -108,8 +130,11 @@ int  bt_mcp_framer_send_idx(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
 /* 接收：喂原始字节（包通道喂完整片；流通道喂任意字节段），重组完成经 sink 上抛 */
 int  bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
                         bt_mcp_msg_sink_t sink, void *user);
-/* 取走待发 NACK 登记：返回 1 = 有（seq/idx 已填），0 = 无 */
-int  bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq, uint8_t *idx);
+/* 取走待发 NACK 登记：返回缺片个数（0 = 无）。
+ * v0.9.1：一次可报多个缺片（分片级 SACK），idx 数组由调用方提供、容量 ≥
+ * BT_MCP_CFG_NACK_MAX_IDX。旧的「单缺片」语义等价于 count==1。 */
+int  bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq,
+                             uint8_t *idx, uint8_t max, uint8_t *count_out);
 void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms);
 /* 丢弃在途重组状态（断链时调用，防跨连接的半帧串味） */
 /* 链路 MTU 变化（BLE 连接后 MTU 交换、CoC 重配）：立即生效于后续分片。

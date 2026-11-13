@@ -111,10 +111,12 @@ int main(void)
                                      on_msg, &sk);
             CHECK(sk.count == 0, "stale fragment dropped as duplicate");
             /* 接收侧应登记了待补的缺片（NACK 队列） */
-            uint8_t ns = 0, ni = 0;
-            CHECK(bt_mcp_framer_take_nack(&rx, &ns, &ni) == 1,
+            uint8_t ns = 0, ni[BT_MCP_CFG_NACK_MAX_IDX], nc = 0;
+            CHECK(bt_mcp_framer_take_nack(&rx, &ns, ni,
+                                          (uint8_t)BT_MCP_CFG_NACK_MAX_IDX,
+                                          &nc) >= 1,
                   "missing fragment registered for NACK");
-            CHECK(ni == 1, "NACK points at the missing index");
+            CHECK(nc >= 1 && ni[0] == 1, "NACK points at the missing index");
         } else {
             CHECK(nf >= 3, "expected >=3 fragments");
         }

@@ -326,17 +326,24 @@ int main(void)
             n.txslot[0].valid = 1; n.txslot[0].seq = 42; n.txslot[0].len = 600;
             memcpy(n.txslot[0].buf, big, BT_MCP_CFG_TX_RETRY_BYTES);
             n.txslot[0].buf[0] = 'y';
-            /* v0.7（A2）：NACK 改为**尾部重放**——从缺片补到末尾，
-             * 而不是只补一片。600B / 238B 分片 = 3 片；从 idx=1 起补 2 片，
-             * 但注意从 idx=1 重放时后续片仍按原 idx 编号，字节长度 = 2×244。 */
-            uint8_t nack[3] = { BT_MCP_CTRL_NACK, 42, 1 };
+            /* v0.9.1（A2 根因修复）：NACK 携带**精确缺片列表**
+             * （载荷 type|seq|count|idx[count]），发送端只为这些片重发，
+             * 不再「从缺片补到末尾」——后者会把已到达的片重发一遍。
+             * 旧格式（len==3）仍然兼容：视为 count=1。 */
+            /* 旧格式兼容：len==3 → 只补 pl[2] 这一片 */
+            uint8_t nack_old[3] = { BT_MCP_CTRL_NACK, 42, 1 };
             wn.len = 0;
-            bt_mcp_session_rx(&n, BT_MCP_KIND_CTRL, 0, nack, 3, NULL, NULL);
-            /* 600B @ MTU244 → 分片载荷 238B，共 3 片（0,1,2）。
-             * 从 idx=1 起尾部重放 = 片 1 + 片 2 = 2 帧。片 2 是最小片
-             * （600-476=124B），所以总字节 = 244 + (6+124) = 374。 */
-            CHECK(wn.len > 244, "NACK replays tail, not a single chunk (v0.7 A2)");
-            CHECK(wn.len == 244 + 6 + 124, "tail replay = 2 whole fragments");
+            bt_mcp_session_rx(&n, BT_MCP_KIND_CTRL, 0, nack_old, 3, NULL, NULL);
+            CHECK(wn.len == 244, "legacy 3-byte NACK replays exactly one chunk");
+
+            /* 新格式：count=2，只补 idx 0 与 idx 1（2 片，但不含已到达的 idx2） */
+            n.txslot[0].valid = 1;
+            n.txslot[0].nack_replay = 0;
+            uint8_t nack_new[5] = { BT_MCP_CTRL_NACK, 42, 2, 0, 1 };
+            wn.len = 0;
+            bt_mcp_session_rx(&n, BT_MCP_KIND_CTRL, 0, nack_new, 5, NULL, NULL);
+            /* 600B @ MTU244 → 238B/片；片 0、1 各 244B（6B 头 + 238B） */
+            CHECK(wn.len == 2 * 244, "precise NACK replays exactly the 2 missing chunks");
         }
 
         /* 接收去重：同 seq 同内容窗口内只上抛一次 */
