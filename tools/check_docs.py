@@ -28,6 +28,8 @@ ALLOW = {
     'BT_MCP_TICK_MS',               # 故意提到：v0.8 记录「这个宏不存在，
                                     #   tick 周期由宿主决定」，属反例引用
     'bt_mcp_port_nimble',           # 参考实现的**文件名**，不是符号
+    'BT_MCP_CFG_NACK_REPLAY_MAX',   # v0.7 存在、v0.9.1 删除；CHANGELOG 历史记录
+    'BT_MCP_CFG_NACK_REPLAY_BUDGET_X',
 }
 
 DOCS = ['README.md', 'docs/README.md', 'docs/bt-mcp-core-draft.md',
@@ -62,20 +64,45 @@ def check_symbols():
             fails.append(f"{d}: 提到不存在的符号 {sym}")
 
 
+def read_baselines():
+    """基线数字的单一来源：tools/baselines.json。
+
+    v0.9.1 之前这里是硬编码的（1295/198/695/…），与版本号那个坑同源：
+    数字涨了但检查器不知道自己该期望新值，于是「文档写旧数」也能通过。
+    """
+    import json
+    try:
+        with open('tools/baselines.json') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def check_numbers():
-    """回归基线数字必须在 README / draft / validation 三处一致。"""
-    # v0.6 起的基线口径：差分 1295 / HIL 198 / 单元 695 / 矩阵 11469 / SDK 38 / golden 20
+    """回归基线数字必须在 README / draft 两处与 baselines.json 一致。"""
+    b = read_baselines()
+    if not b:
+        fails.append('tools/baselines.json 缺失或无法解析（基线数字单一来源）')
+        return
+
+    diff = str(b['differential']['total'])
+    hil = str(b['port_hil'])
+    unit = str(b['unit_directed'])
+    matrix = str(b['matrix_assertions'])
+    sdk = str(b['sdk_interop'])
+    golden = str(b['golden'])
+
     targets = {
-        'README.md': [r'1295', r'198', r'695', r'38', r'20'],
-        'docs/bt-mcp-core-draft.md': [r'1295', r'198', r'695', r'11469', r'38', r'20'],
+        'README.md': [diff, hil, unit, sdk, golden],
+        'docs/bt-mcp-core-draft.md': [diff, hil, unit, matrix, sdk, golden],
     }
     for path, pats in targets.items():
         if not os.path.exists(path):
             continue
         t = open(path, encoding='utf-8').read()
         for p in pats:
-            if not re.search(r'\b' + p + r'\b', t):
-                fails.append(f"{path}: 缺少基线数字 {p}")
+            if not re.search(r'\b' + re.escape(p) + r'\b', t):
+                fails.append(f"{path}: 缺少基线数字 {p}（应与 tools/baselines.json 一致）")
 
 
 def read_version():

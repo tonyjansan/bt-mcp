@@ -4,7 +4,7 @@ Bluetooth-carried MCP (Model Context Protocol) stack — a platform-agnostic
 C99 protocol core that runs MCP over BLE GATT / Classic SPP / L2CAP CoC / any
 byte channel, with zero vendor ifdefs and zero OS dependencies.
 
-## Status (2026-11-13, v0.9.1)
+## Status (2026-11-16, v0.9.2)
 
 | Layer | Module | Notes |
 |---|---|---|
@@ -19,20 +19,24 @@ byte channel, with zero vendor ifdefs and zero OS dependencies.
 
 | 套件 | 数量 |
 |---|---|
-| C ↔ 独立 Rust oracle 差分 | **1295**（主矩阵 1045 + FCS16 配对 196 + 共享模式 54） |
+| C ↔ 独立 Rust oracle 差分 | **1358**（主矩阵 1047 + FCS16 配对 198 + 共享模式 113） |
 | Port HIL（GATT/SPP/CoC） | **198** |
-| 单元与定向 | **695** |
+| 单元与定向 | **760** |
 | 表驱动矩阵断言 | **11469**（3141 生成用例） |
 | 官方 MCP TypeScript SDK 互验 | **38** |
 | 独立第二实现校验（Python 解析器） | 见 `tests/cross_impl_l3.py` |
 | golden transcript | **20** |
 
-覆盖率：行 **95%** / 分支 **68%**（门禁 95/68）。
+覆盖率：行 **95.4%** / 分支 **69.6%**（门禁 95/69）。
 静态 RAM 有 12 组合基线门禁（`tools/ram_baseline.py`），回归即失败。
+静态分析：`clang --analyze` 零告警 + **6 配置 × 8 文件 × 10 个严格告警开关**矩阵零告警
+（`tools/static_analysis.py`，门禁自带自测防「跑空命令报 OK」）。
+体积：`tools/footprint.py --arm` 用真 Thumb-2 交叉编译量目标代码（约 42.5KB）。
 
-v0.6 追加的验证层：表驱动组合矩阵（3141 自动生成用例）、语法感知 fuzz
+验证层次（按加入顺序）：v0.6 表驱动组合矩阵（3141 自动生成用例）、语法感知 fuzz
 （375 万次零违反）、正交差分矩阵（16 组合 + 配置签名比对）、链路仿真 soak
-（8 轮阶梯加压）、多会话压测（4×4）。
+（8 轮阶梯加压）、多会话压测（4×4）；**v0.9 独立第二实现**（Python 只读解析器，
+抓「C 与 Rust 一起错」）；**v0.9.1 配置矩阵静态分析 + ARM 体积测量**。
 ASan/UBSan 全绿，TSan 干净，fuzz 帧层 200 万轮 + FCS16 80 万轮零崩溃。
 
 ## 中期里程碑：M1「可交付」（v1.0-rc）
@@ -44,9 +48,12 @@ ASan/UBSan 全绿，TSan 干净，fuzz 帧层 200 万轮 + FCS16 80 万轮零崩
 真实固件 RAM/Flash 增量、外部人独立接入、第二实现互验、遗留缺陷清零、静态分析门禁）。
 详见 [`docs/roadmap-v0.7.md`](docs/roadmap-v0.7.md)。
 
-**当前最硬的缺口**：`port/` 只有 3 个头文件适配层、没有 `examples/` 目录——
-所有蓝牙行为（MTU 协商、notify 节流、断链语义）都还是**假设**，
-从未在真实协议栈上验证。这是里程碑的**唯一硬依赖**。
+**当前最硬的缺口**：协议核心已有两重独立验证（C↔Rust 差分 + Python 独立实现），
+但**蓝牙行为仍是假设**——v0.8 补了 [`docs/porting-guide.md`](docs/porting-guide.md)
+与 [`examples/zephyr/bt_mcp_port_nimble.c`](examples/zephyr/bt_mcp_port_nimble.c)
+参考实现，并用 stub 头做了 API 校验（抓到 3 个真错误），但**从未在真实协议栈上
+编译或运行过**。MTU 协商、notify 背压、断链语义的正确性，目前只有文档层面的论证。
+这是里程碑 ``E1/E2`` 的**唯一硬依赖**：需要一块板子。
 
 ## 规范覆盖（v0.9）
 

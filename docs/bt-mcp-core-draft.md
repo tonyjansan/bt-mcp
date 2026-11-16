@@ -8,8 +8,9 @@
 
 
 
-日期：2026-11-11 · 状态：草案。v0.6 实现已验证：**1295 项差分 + 198 项 port HIL
-+ 695 项单元/定向 + 11469 项表驱动矩阵断言 + 38 项官方 MCP SDK 互验 + 20 项 golden**，
+日期：2026-11-13 · 状态：实现说明（informative）。v0.9.1 实现已验证：
+**1358 项差分 + 198 项 port HIL + 760 项单元/定向 + 11469 项表驱动矩阵断言
++ 38 项官方 MCP SDK 互验 + 20 项 golden**，
 全绿；行覆盖 **95.1%** / 分支 **68.2%**；ASan/UBSan/TSan 干净。
 
 > 本文是**唯一的协议与接口权威文档**（与公开头文件同步）。版本演进见下方摘要；
@@ -42,7 +43,7 @@
 - **大消息重传保护**：`bt_mcp_session_tx_ref()` 引用式保护，突破 512B 限制（§5.4）；
 - **拥塞退避**：RTO 指数退避（上限 `BT_MCP_CFG_RTO_MAX_MS`），ACK 到达即回落（§5.4）；
 - **多会话**：`bt_mcp_server_pool_t` 按 session 分派（§7.1）；
-- **共享重组缓冲**：`BT_MCP_CFG_SHARED_REASM=1` 把 framer 从 41072B 降到 16448B（§7.3）；
+- **共享重组缓冲**：`BT_MCP_CFG_SHARED_REASM=1` 把 framer 从 41248B 降到 16504B（§7.8）；
 - **解析器收紧**：拒绝尾随垃圾与尾随逗号（帧长度已界定边界，尾随字节即损坏）（§4.5）；
 - **健壮性**：writer 校验 sink、client/JSON getter 校验空指针，全部 fail-closed（§7.4）。
 
@@ -146,13 +147,21 @@ int  bt_mcp_framer_send_idx(bt_mcp_framer_t *f, uint8_t kind, uint8_t seq,
                             uint8_t idx, const uint8_t *payload, uint32_t len,
                             int (*emit)(void*, const uint8_t*, uint16_t), void *io);
 uint8_t bt_mcp_framer_alloc_seq(bt_mcp_framer_t *f);
+/* 一条 len 字节消息在当前 MTU 下会被切成几片（v0.9.1；NACK/诊断用） */
+uint8_t bt_mcp_framer_frag_count(const bt_mcp_framer_t *f, uint32_t len);
 /* 接收：喂原始字节（包通道喂整片；流通道喂任意字节段），重组完成经 sink 上抛 */
 int  bt_mcp_framer_feed(bt_mcp_framer_t *f, const uint8_t *in, uint16_t len,
                         bt_mcp_msg_sink_t sink, void *user);
-/* 取走待发 NACK 登记：1=有（seq/idx 已填），0=无 */
-int  bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq, uint8_t *idx);
+/* 取走待发 NACK 登记：返回缺片个数（0=无）。
+ * v0.9.1：一次可报**多个**缺片（分片级 SACK），idx 容量需 ≥ BT_MCP_CFG_NACK_MAX_IDX。
+ * 旧语义「单缺片」等价于返回 1。 */
+int  bt_mcp_framer_take_nack(bt_mcp_framer_t *f, uint8_t *seq,
+                             uint8_t *idx, uint8_t max, uint8_t *count_out);
 void bt_mcp_framer_tick(bt_mcp_framer_t *f, uint32_t now_ms);
-/* 链路 MTU 热更新（v0.4）：0 = 回退 cap->mtu；流通道返回 E_ARGS */
+/* 链路 MTU 热更新（v0.4）：0 = 回退 cap->mtu；流通道返回 E_ARGS。
+ * v0.9.1：若 chunk 因此改变，会**丢弃全部在途重组槽**——位图重组的偏移
+ * 由 idx×chunk 计算，MTU 突变会让已收片落在旧边界、新片落在新边界。
+ * 这些消息本就不可能正确完成，由消息级重传重新发一遍。 */
 int  bt_mcp_framer_set_mtu(bt_mcp_framer_t *f, uint16_t mtu);
 void bt_mcp_framer_reset(bt_mcp_framer_t *f);   /* 断链丢弃半帧 */
 ```
@@ -462,8 +471,7 @@ for (;;) {
 #define BT_MCP_CFG_DEDUPE_MS        20000  /* 必须覆盖重传寿命（v0.7: 5000→20000） */
 #define BT_MCP_CFG_RTO_MAX_MS       4800   /* 指数退避上限（v0.5） */
 #define BT_MCP_CFG_CREDIT_REFRESH_MS 600   /* 空闲信用刷新周期（v0.6） */
-#define BT_MCP_CFG_NACK_REPLAY_MAX   16    /* NACK 尾部重放一次最多几片（v0.7） */
-#define BT_MCP_CFG_NACK_REPLAY_BUDGET_X 16 /* 单消息重放预算 = 分片数 × 该值（v0.7） */
+#define BT_MCP_CFG_NACK_MAX_IDX     16    /* 一次 NACK 最多报几个缺片（v0.9.1） */
 
 /* ---- 安全（§6）---- */
 #define BT_MCP_CFG_RESUME_MAX_FAIL  3
@@ -507,30 +515,34 @@ for (;;) {
 只有单消息上限/槽数/分页大小不同。
 
 **实测静态 RAM**（`sizeof(framer) + sizeof(session) + sizeof(server)`，
-2026-11-11 v0.5 实测，含 v0.4/v0.5 新增的订阅表、S2C 在途槽、batch 聚合缓冲、
-`_meta` 缓冲、多会话池字段）：
+2026-11-13 v0.9.1 实测，含 v0.4/v0.5 的订阅表、S2C 在途槽、batch 聚合、
+`_meta` 缓冲，以及 v0.9.1 的**缺片位图**（每重组槽 +48B）：
 
 | 档位 | MAX_MSG | 重组槽 | framer | session | server | **合计** |
 |---|---|---|---|---|---|---|
-| COMPACT | 1024 | 2 | 3152 | 808 | 6624 | **10584 B** |
-| STANDARD | 2048 | 4 | 10352 | 1320 | 7776 | **19448 B** |
-| FULL | 8192 | 4 | 41072 | 1320 | 14048 | **56440 B** |
+| COMPACT | 1024 | 2 | 3248 | 896 | 6656 | **10800 B** |
+| STANDARD | 2048 | 4 | 10528 | 1408 | 7808 | **19744 B** |
+| FULL | 8192 | 4 | 41248 | 1408 | 14080 | **56736 B** |
 
 **开启 `BT_MCP_CFG_SHARED_REASM=1`（§4.3）后**：
 
 | 档位 | framer | 合计 | 相对默认 |
 |---|---|---|---|
-| COMPACT | 2112 | **9544 B** | −1040 B（−10%） |
-| STANDARD | 4160 | **13256 B** | −6192 B（−32%） |
-| FULL | 16448 | **31816 B** | **−24624 B（−44%）** |
+| COMPACT | 2168 | **9720 B** | −1080 B（−10%） |
+| STANDARD | 4216 | **13432 B** | −6312 B（−32%） |
+| FULL | 16504 | **31992 B** | **−24744 B（−44%）** |
+
+> **这些数字受 CI 门禁保护**：`tools/ram_baseline.py` 量 12 个组合（3 档 ×
+> 4 配置），与 `tools/ram_baseline.json` 比对，回归即失败。改结构体必须
+> 显式 `--update` 并 review diff——历史上它抓到过 session +64B 的意外回归。
 
 档位选择建议：单消息上限决定 `MAX_MSG`，`MAX_MSG × MAX_REASM` 决定接收缓冲
 主体。RAM 紧张且同时只有一个大消息在途时，优先开共享模式。
-（`tools/bench.c` 可复现上表；CI 里应把这三行做成基线，回归即失败——v0.6 N7。）
+（上表由 `tools/ram_baseline.py` 复现，已作为 CI 门禁——v0.6 N7 已落地。）
 
-> 注：v0.4 及更早的文档给的是 4048/11760/42480，那是**只算 framer+session、
-> 且当时的 server 结构更小**的数字。v0.4 新增订阅表/S2C 槽、v0.5 新增 batch
-> 聚合与 `_meta` 后，含 server 的完整占用如上表。
+> 注：更早的文档给过 4048/11760/42480（只算 framer+session）与
+> 10584/19448/56440（v0.5）。当前值再增了 v0.7 的 stale 守卫字段与
+> v0.9.1 的缺片位图，故合计比 v0.5 多 216/296/296 B。
 
 ## 8. Port 清单（协议核心之外的全部工作）
 
@@ -558,7 +570,7 @@ SPP 与 GATT 之上协议核心**零代码差异**：唯一区别是 port 填的
 
 | 层 | 手段 | 规模 | 能发现 | 看不见 |
 |---|---|---|---|---|
-| L1 | C ↔ 独立 Rust oracle 差分 | 1295 项（主 1045 + FCS16 配对 196 + 共享模式 54） | 两侧**不一致** | 两侧一起错 |
+| L1 | C ↔ 独立 Rust oracle 差分 | 1358 项（主 1047 + FCS16 配对 198 + 共享 113） | 两侧**不一致** | 两侧一起错 |
 | L2 | 结构符合性（`test_conformance.c`） | 64 项 | 响应**不符合规范结构** | 规范之外的语义错 |
 | L3 | golden transcript（人工按规范核对） | 20 条 | 字节**非预期漂移** | 规范理解本身错 |
 | L4 | 官方 MCP SDK 互验 | 38 项 | 第三方**无法正确理解**输出 | 传输层之外的实现缺陷 |

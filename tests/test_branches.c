@@ -431,16 +431,39 @@ static void branches_session_stale(void)
     CHECK(bt_mcp_session_rx(&se, BT_MCP_KIND_CTRL, 0, nack, 3, NULL, NULL)
           == BT_MCP_OK, "NACK unknown slot tolerated");
 
-    /* 重放预算耗尽后再来 NACK → 走 budget 提前返回分支。
+    /* v0.9.1：旧的「重放预算」（NACK_REPLAY_BUDGET_X）随尾部重放一并删除，
+     * 改为覆盖**新的** NACK 载荷形态：
+     *   - 旧格式 len==3（count 隐含为 1）：兼容分支；
+     *   - 新格式 count==0 / count 超出载荷长度：应报 E_SYNC；
+     *   - 新格式正常 count：精确补发。
      * 注意：上面连发多帧会耗尽信用，先把信用补回来（模拟对端消费）。 */
     se.credits = 255;
-    CHECK(bt_mcp_session_tx(&se, (const uint8_t *)"{\"c\":3}", 7) == 0,
-          "tx for budget test");
-    for (int i = 0; i < BT_MCP_CFG_NACK_REPLAY_BUDGET_X + 2; i++) {
-        uint8_t n[3] = { BT_MCP_CTRL_NACK, se.txslot[0].seq, 0 };
-        (void)bt_mcp_session_rx(&se, BT_MCP_KIND_CTRL, 0, n, 3, NULL, NULL);
-    }
-    CHECK(1, "replay budget exercised");
+    /* 用**多片**消息：单片的 idx 只能为 0，请求 idx 1 会被 send_idx 拒掉。
+     * 注意槽是环形分配的，新消息不一定落在 txslot[0]——要按 seq 找。 */
+    /* 必须 ≤ BT_MCP_CFG_TX_RETRY_BYTES(512)，否则不建重传槽；
+     * 400B @ MTU244 = 2 片（238 + 162），idx 0/1 都合法。 */
+    static char multi[400];
+    memset(multi, 'z', sizeof multi);
+    CHECK(bt_mcp_session_tx(&se, (const uint8_t *)multi, sizeof multi) == 0,
+          "tx multi-fragment for new NACK tests");
+    uint8_t seq0 = 0;
+    int sidx = -1;
+    for (int i = 0; i < BT_MCP_CFG_TX_SLOTS; i++)
+        if (se.txslot[i].valid && se.txslot[i].len == sizeof multi) {
+            seq0 = se.txslot[i].seq; sidx = i; break;
+        }
+    CHECK(sidx >= 0, "multi-fragment slot located");
+    if (sidx < 0) return;
+    uint8_t bad0[4] = { BT_MCP_CTRL_NACK, seq0, 0, 0 };       /* count=0 */
+    CHECK(bt_mcp_session_rx(&se, BT_MCP_KIND_CTRL, 0, bad0, 4, NULL, NULL)
+          == BT_MCP_E_SYNC, "NACK with count=0 rejected");
+    uint8_t bad1[4] = { BT_MCP_CTRL_NACK, seq0, 5, 0 };       /* count 超出载荷 */
+    CHECK(bt_mcp_session_rx(&se, BT_MCP_KIND_CTRL, 0, bad1, 4, NULL, NULL)
+          == BT_MCP_E_SYNC, "NACK with count > payload rejected");
+    uint8_t good[5] = { BT_MCP_CTRL_NACK, seq0, 2, 0, 1 };    /* 精确补 2 片 */
+    int rc_good = bt_mcp_session_rx(&se, BT_MCP_KIND_CTRL, 0, good, 5, NULL, NULL);
+    if (rc_good != BT_MCP_OK) printf("[dbg] good NACK rc=%d\n", rc_good);
+    CHECK(rc_good == BT_MCP_OK, "multi-index NACK accepted");
 }
 
 /* ============ mcp_server.c：JSON 转义的每个特殊字符分支 ============ */

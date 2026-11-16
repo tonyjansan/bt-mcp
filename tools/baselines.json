@@ -1,0 +1,21 @@
+{
+  "_comment": "回归基线的单一来源。docs/README/检查器都读这里，避免各自硬编码后互相漂移（v0.9.1 教训：check_docs.py 曾把版本号与基线数字硬编码，导致文档写旧值而门禁照样通过）。更新方式：跑 ./build.sh 后把实测值填回，并同步 tools/ram_baseline.json。",
+  "differential": {
+    "total": 1358,
+    "main_matrix": 1047,
+    "fcs16_paired": 198,
+    "shared_reasm": 113
+  },
+  "port_hil": 198,
+  "unit_directed": 760,
+  "matrix_assertions": 11469,
+  "matrix_generated_cases": 5325,
+  "sdk_interop": 38,
+  "golden": 20,
+  "coverage": {
+    "line_pct": 95.4,
+    "branch_pct": 69.6,
+    "line_gate": 95,
+    "branch_gate": 69
+  }
+}

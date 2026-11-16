@@ -15,7 +15,7 @@
 #include "bt_mcp/err.h"
 #include <string.h>
 
-#define BT_MCP_GAP_WAIT_MAX 4   /* 同一槽位最多容忍 4 次缺片，超限弃槽 */
+/* BT_MCP_CFG_GAP_WAIT_MAX 见 config.h（v0.9.1 起可配置） */
 
 static uint16_t chunk_cap(const bt_mcp_chan_cap_t *cap, uint16_t mtu_ovr)
 {
@@ -323,7 +323,7 @@ static int feed_packet(bt_mcp_framer_t *f, const uint8_t *frag, uint16_t len,
         s->t_last = f->now_ms;      /* 重复片：只刷新活跃时间 */
         /* 无进展的重发也计入缺失等待：否则「对端反复重发同一片」
          * 这种真·失联场景永远不会弃槽（且不依赖 pump 是否被调用）。 */
-        if (++s->gap_wait > BT_MCP_GAP_WAIT_MAX) {
+        if (++s->gap_wait > BT_MCP_CFG_GAP_WAIT_MAX) {
             s->in_use = 0;
             f->dead_valid = 1;
             f->dead_seq = seq;
@@ -356,7 +356,7 @@ static int feed_packet(bt_mcp_framer_t *f, const uint8_t *frag, uint16_t len,
          * 那样会把还在正常推进的消息误判为对端失联（实测交付率 34→16）。 */
         if (!f->nack_pending) {
             if (s->len_total == s->nack_len) {
-                if (++s->gap_wait > BT_MCP_GAP_WAIT_MAX) {
+                if (++s->gap_wait > BT_MCP_CFG_GAP_WAIT_MAX) {
                     s->in_use = 0;                /* 真补不齐 → 弃槽 */
                     f->dead_valid = 1;
                     f->dead_seq = seq;

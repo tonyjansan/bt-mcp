@@ -12,7 +12,11 @@
  * 传输：spawn `btmcp_mock pipe`，管道上跑 `u16 len(LE) + JSON`。帧层（0xB7 分片）
  * 不参与——规范符合性只取决于 JSON；分片由差分/HIL 覆盖。
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+/* 必须用 exports 映射声明的入口 "./client"，不能写深路径 "./client/index.js"：
+ * SDK 1.32.2 的 package.json exports 只声明了 "./client"，
+ * 而 Node 的严格 ESM 解析在 exports 存在时**拒绝**未声明的子路径。
+ * 旧安装因布局不同侥幸能跑，干净重装后立刻暴露（ERR_MODULE_NOT_FOUND）。 */
+import { Client } from "@modelcontextprotocol/sdk/client";
 import { spawn } from "node:child_process";
 import process from "node:process";
 

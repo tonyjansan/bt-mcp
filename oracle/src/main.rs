@@ -71,7 +71,8 @@ fn max_reasm() -> usize {
     *MAX_REASM_V.get_or_init(|| std::env::var("BT_MCP_MAX_REASM")
         .ok().and_then(|v| v.parse().ok()).unwrap_or(4))
 }
-const GAP_WAIT_MAX: u8 = 4;
+/* == BT_MCP_CFG_GAP_WAIT_MAX（v0.9.1 起 8：NACK 帧自身也会丢） */
+const GAP_WAIT_MAX: u8 = 8;
 const FRAG_TOUT: u32 = 2000;
 const RESUME_TOUT: u32 = 5000;
 const REQ_TOUT: u32 = 30000;
